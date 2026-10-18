@@ -1,0 +1,68 @@
+servers:
+  alerts:
+    command: python
+    args: [-m, mcp_servers.alert_server]
+  cameras:
+    command: python
+    args: [-m, mcp_servers.camera_server]
+  yolink:
+    command: python
+    args: [-m, mcp_servers.yolink_server]
+actions:
+  red_light:
+    name: Turn alert light red
+    server: alerts
+    tool: set_light
+    editable_arguments: [on, hue, saturation, brightness, alert]
+    arguments: {on: true, hue: 0, alert: lselect}
+  notify_me:
+    name: Send scene notification
+    server: alerts
+    tool: publish
+    editable_arguments: [message, title, priority]
+    default_instructions: >
+      Write the scene result in plain English.
+      Use priority 3 for normal results and priority 4 for abnormal or unknown results,
+      unless the scene instructions specify otherwise. Be brief.
+    arguments:
+      title: 'Scene Watch: {{ scene.name }}'
+  light_off:
+    name: Turn alert light off
+    server: alerts
+    tool: set_light
+    manual: true
+    arguments: {on: false}
+
+sensors:
+  coop_camera:
+    name: Coop camera
+    description: Camera looking inside the coop; observes visible animals and objects.
+    server: cameras
+    tool: capture_camera
+    arguments:
+      rtsp_env: CAMERA_1_RTSP_URL
+  camera_2:
+    name: Second camera
+    description: Second camera; observes visible animals and objects.
+    server: cameras
+    tool: capture_camera
+    arguments:
+      rtsp_env: CAMERA_2_RTSP_URL
+  chicky_door:
+    name: Chicky door
+    description: YoLink contact sensor on Chicky's coop entrance; reports open or closed, not animal counts.
+    server: yolink
+    tool: read_door
+    # Reject cloud reports older than two hours.
+    max_age_seconds: 7200
+    arguments:
+      device_id: REPLACE_WITH_DEVICE_ID
+  girls_door:
+    name: Girls door
+    description: YoLink contact sensor on the girls' coop entrance; reports open or closed, not animal counts.
+    server: yolink
+    tool: read_door
+    # Reject cloud reports older than two hours.
+    max_age_seconds: 7200
+    arguments:
+      device_id: REPLACE_WITH_DEVICE_ID

@@ -1,0 +1,47 @@
+schedules:
+  nightly_coop_check:
+    scene: all_coops
+    time: "21:15"
+    timezone: America/New_York
+    enabled: true
+    catch_up_minutes: 60
+
+scenes:
+  girls:
+    name: Girls
+    sensors:
+      coop_camera:
+        instructions: Take 4 captures, 10 seconds apart. Evaluate each capture independently.
+      girls_door:
+        evaluations: 1
+    conditions:
+      - Three chickens are visible inside the coop.
+      - The coop door is closed.
+  chicky:
+    name: Chicky
+    sensors:
+      camera_2:
+        instructions: Take 4 captures, 10 seconds apart. Evaluate each capture independently.
+    conditions:
+      - One chicken is visible inside the coop.
+      - The coop door is closed.
+  all_coops:
+    name: All coops
+    on:
+      not_normal:
+        instructions: >
+          Turn Hue red, then send me a phone notification with the scene result in plain english.
+          List what's not normal first, then list what's normal. Be brief but informative.
+        actions: [red_light, notify_me]
+      normal:
+        instructions: >
+          Send me a phone notification in plain English.
+          Keep it brief: confirm all chickens are accounted for and the doors are closed,
+          if the findings support that. Avoid listing each coop or repeating that nothing
+          went wrong.
+        actions: [notify_me]
+    scenes:
+      - girls
+      - chicky
+    conditions:
+      - Scenes girls and chicky pass.
