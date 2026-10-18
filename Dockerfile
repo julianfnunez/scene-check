@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.source="https://github.com/julianfnunez/scene-che
 LABEL org.opencontainers.image.title="Scene Watch"
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
-COPY agent.py actions.py action_planner.py narration.py planner.py scheduler.py service.py settings.py web.py ./
+COPY agent.py actions.py action_planner.py narration.py planner.py scheduler.py sensors.py service.py settings.py web.py ./
 COPY mcp_servers ./mcp_servers
 COPY static ./static
 COPY .env.defaults ./.env.defaults
