@@ -1,6 +1,7 @@
 """Generic, single-attempt MCP actions. Tool output never becomes instructions."""
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -12,6 +13,7 @@ from settings import ROOT, ActionInstructions, ActionStep
 from narration import write_report, fallback_report
 
 TEMPLATE = re.compile(r'{{\s*([a-zA-Z_][\w.]*)\s*}}')
+logger = logging.getLogger(__name__)
 
 
 def render(value, context):
@@ -69,30 +71,41 @@ async def execute(action_id, config, context):
     server = config.servers[action.server]
     outcome = {'action_id': action_id, 'name': action.name,
                'started_at': datetime.now(timezone.utc).isoformat(), 'status': 'running'}
+    stage = 'argument templates'
     try:
         arguments = render(action.arguments, context)
+        stage = 'MCP server startup'
         params = StdioServerParameters(
             command=sys.executable if server.command == 'python' else server.command,
             args=server.args, cwd=str(ROOT), env={**os.environ, **server.env})
         async with asyncio.timeout(server.timeout_seconds):
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
+                    stage = 'MCP initialization'
                     await session.initialize()
+                    stage = 'MCP tool discovery'
                     listing = await session.list_tools()
                     if action.tool not in {t.name for t in listing.tools}:
                         raise ValueError('Configured action tool was not found')
                     tool = next(t for t in listing.tools if t.name == action.tool)
+                    stage = 'MCP argument validation'
                     validate(arguments, tool.inputSchema)
+                    stage = 'MCP tool invocation'
                     result = await session.call_tool(action.tool, arguments)
                     if result.isError:
+                        stage = 'MCP tool reported failure'
                         raise RuntimeError('Action tool reported failure')
+                    stage = 'MCP session cleanup'
         outcome['status'] = 'succeeded'
     except asyncio.CancelledError:
         outcome.update(status='uncertain', error='Interrupted; action may have executed. Not retried.')
         raise
-    except Exception:
+    except Exception as exc:
         # A lost response can follow a successful side effect. Never blindly retry.
-        outcome.update(status='failed', error='Action failed or delivery could not be confirmed; see adapter logs. Not retried.')
+        # Never log exception text, MCP error content, arguments, or tracebacks containing vendor data.
+        logger.error('Action %s failed at %s (%s). Not retried.', action_id, stage, type(exc).__name__)
+        outcome.update(status='failed', error_stage=stage,
+                       error=f'Action failed at {stage}; delivery may be unconfirmed. See container logs. Not retried.')
     finally:
         outcome['finished_at'] = datetime.now(timezone.utc).isoformat()
     return outcome

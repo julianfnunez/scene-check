@@ -138,7 +138,7 @@ def test_cancel_during_action_preserves_intent_and_releases_busy(monkeypatch):
 
 
 @pytest.mark.parametrize('mode', ['success', 'error', 'missing', 'timeout'])
-def test_real_mcp_action(tmp_path, mode):
+def test_real_mcp_action(tmp_path, mode, caplog):
     server = tmp_path / 'adapter.py'
     log = tmp_path / 'calls.jsonl'
     server.write_text('''import asyncio, json, sys
@@ -159,6 +159,10 @@ mcp.run(transport='stdio')
     result = asyncio.run(execute('red', Configuration.model_validate(raw), context_for(record())))
     assert result['status'] == ('succeeded' if mode == 'success' else 'failed')
     assert 'SECRET' not in json.dumps(result)
+    if mode != 'success':
+        assert result['error_stage']
+        assert 'Action red failed at' in caplog.text
+        assert 'SECRET' not in caplog.text
     assert (log.read_text().splitlines() if log.exists() else []) == ([] if mode == 'missing' else ['"Door open"'])
 
 
@@ -227,3 +231,41 @@ def test_alert_adapters(monkeypatch):
     assert alert_server.publish('Door open', title='Coop — alert') == {'accepted': True}
     assert requests[0].data == b'Door open'
     assert requests[0].get_header('Authorization') == 'Bearer secret'
+
+
+@pytest.mark.parametrize('kind,expected', [
+    ('unauthorized', 'HTTP 401'), ('forbidden', 'HTTP 403'),
+    ('rate_limit', 'HTTP 429'), ('dns', 'DNS lookup failed'),
+    ('tls', 'TLS certificate/connection error'), ('timeout', 'TimeoutError'),
+])
+def test_notification_failure_diagnostics_redact_sensitive_data(monkeypatch, caplog, kind, expected):
+    import socket
+    import ssl
+    import urllib.error
+    from mcp_servers import alert_server
+    monkeypatch.setenv('NTFY_URL', 'https://SECRET.example/SECRET-topic')
+    monkeypatch.setenv('NTFY_TOKEN', 'SECRET-token')
+    failures = {
+        'unauthorized': urllib.error.HTTPError('https://SECRET', 401, 'SECRET', {}, None),
+        'forbidden': urllib.error.HTTPError('https://SECRET', 403, 'SECRET', {}, None),
+        'rate_limit': urllib.error.HTTPError('https://SECRET', 429, 'SECRET', {}, None),
+        'dns': urllib.error.URLError(socket.gaierror('SECRET-host')),
+        'tls': urllib.error.URLError(ssl.SSLError('SECRET-host')),
+        'timeout': TimeoutError('SECRET-request'),
+    }
+    def fail(*args, **kwargs): raise failures[kind]
+    monkeypatch.setattr(alert_server.urllib.request, 'urlopen', fail)
+    with pytest.raises(RuntimeError) as exc:
+        alert_server.publish('SECRET-message')
+    assert expected in caplog.text
+    assert 'SECRET' not in caplog.text + str(exc.value)
+
+
+def test_missing_notification_url_logs_without_sending(monkeypatch, caplog):
+    from mcp_servers import alert_server
+    monkeypatch.delenv('NTFY_URL', raising=False)
+    def fail(*args, **kwargs): pytest.fail('Missing URL must not send anything')
+    monkeypatch.setattr(alert_server.urllib.request, 'urlopen', fail)
+    with pytest.raises(ValueError): alert_server.publish('SECRET-message')
+    assert 'ntfy configuration invalid' in caplog.text
+    assert 'SECRET' not in caplog.text

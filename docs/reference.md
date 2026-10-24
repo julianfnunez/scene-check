@@ -505,3 +505,14 @@ or scheduled. `GET /api/scenes` includes `schedules`; check records contain `sou
 `schedule_id`, `scheduled_date`, and `scheduled_for` (UTC) for scheduled submissions.
 Existing REST clients can continue using the same check endpoint. Edit YAML and
 restart to change schedules. Only daily explicit-time schedules are supported.
+
+## Diagnosing failed actions
+
+Failed action records include `error_stage`, such as MCP initialization, tool
+argument validation, or tool invocation. The host logs the stage and exception
+type without printing arguments, tool error contents, or vendor responses.
+The ntfy adapter logs HTTP rejection codes and distinguishes DNS, TLS, and timeout
+failures. These diagnostics exclude URLs, bearer tokens, and notification text.
+After updating the container, run a fresh check and inspect its container logs;
+previous failure records cannot recover details that were not logged. Unconfirmed
+actions are still not automatically retried.
