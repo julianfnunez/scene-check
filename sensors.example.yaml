@@ -9,6 +9,14 @@ servers:
     command: python
     args: [-m, mcp_servers.yolink_server]
 actions:
+  notify_failure:
+    name: Request manual check
+    server: alerts
+    tool: publish
+    arguments:
+      title: 'Scene Watch: {{ scene.name }}'
+      message: '{{ result.summary }}'
+      priority: 4
   red_light:
     name: Turn alert light red
     server: alerts

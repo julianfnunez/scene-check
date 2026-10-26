@@ -136,10 +136,10 @@ def action_arguments(action, status, overrides):
     return {**action.arguments, **action.arguments_by_status.get(status, {}), **overrides}
 
 
-async def run_actions(record, scene, config, save, executor=execute, writer=write_report):
+async def run_actions(record, scene, config, save, executor=execute, writer=write_report, *, steps=None):
     record['actions'] = []
     reports = {}
-    for step in selected_steps(scene, record['status']):
+    for step in (selected_steps(scene, record['status']) if steps is None else steps):
         action_id = step.action_id
         action = config.actions[action_id]
         effective = config.model_copy(update={'actions': {**config.actions, action_id:

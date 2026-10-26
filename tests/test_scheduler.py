@@ -113,6 +113,21 @@ def test_manual_does_not_claim_schedule_and_save_failure_does_not_reserve():
     asyncio.run(exercise())
 
 
+def test_yesterdays_attempt_does_not_block_todays_schedule():
+    async def exercise():
+        state = SimpleNamespace(config=config(), config_error=None, active=None, task=None)
+        records = []
+        async def runner(rec, scene):
+            state.active = None
+        service = CheckService(state, records.append, runner, [])
+        for stamp in ['2026-10-24T21:15:00-04:00', '2026-10-25T21:15:00-04:00']:
+            submit_due_checks(service, utc(stamp))
+            await state.task
+            submit_due_checks(service, utc(stamp))
+        assert [r['scheduled_date'] for r in records] == ['2026-10-24', '2026-10-25']
+    asyncio.run(exercise())
+
+
 def test_background_loop_stops_promptly():
     async def exercise():
         state = SimpleNamespace(config=config(enabled=False), config_error=None)

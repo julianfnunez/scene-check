@@ -1,8 +1,17 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scene Watch</title><style>
 :root{color-scheme:dark;font:16px system-ui;background:#101820;color:#e9eff3}body{max-width:1000px;margin:auto;padding:32px 20px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:30px;margin-bottom:4px}h2{font-size:21px}small,.muted{color:#a9bac6}article{background:#1b2833;border:1px solid #344653;padding:22px;border-radius:14px;margin:18px 0}button{background:#a7e8cb;color:#10271d;border:0;padding:12px 18px;border-radius:8px;cursor:pointer;font-weight:700}button:disabled{opacity:.45;cursor:wait}.normal,.met{color:#a7e8cb}.needs_attention,.not_met{color:#ffaf92}.unknown{color:#ebd38c}.images{display:flex;gap:12px;flex-wrap:wrap}.images figure{margin:0;max-width:300px}img{width:100%;border-radius:8px}li{margin:10px 0}summary{cursor:pointer}details{margin:16px 0}select{display:block;width:100%;max-width:650px;margin:10px 0 20px;padding:12px;border:1px solid #344653;border-radius:8px;background:#1b2833;color:inherit;font:inherit}label{color:#a9bac6}#error{color:#ffaf92}pre{white-space:pre-wrap;font-size:12px}.badge{text-transform:uppercase;letter-spacing:.07em;font-size:12px;font-weight:700}</style></head><body><header><div><h1>Scene Watch</h1><small>Your scenes. Your definition of normal.</small></div><span class="muted">Sensor pilot</span></header><p id="error" role="alert"></p><div id="scenes"></div><details id="individual-scenes"><summary>Individual scenes</summary><div id="individual-scene-cards"></div></details><div id="manual-actions"></div><h2>Observations</h2><div id="observation-picker" hidden><label for="observation-select">Choose an observation</label><select id="observation-select"></select></div><div id="checks">No observations yet.</div><script>
 const $=id=>document.getElementById(id);const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(path,opts){let r=await fetch(path,opts);let d=await r.json();if(!r.ok)throw Error(d.detail||'Request failed');return d}
-let running=false, observations=[], token='';
+async function api(path,opts){
+  const r=await fetch(path,opts);
+  const body=await r.text();
+  let d;
+  try{d=JSON.parse(body)}catch{
+    throw Error(`${opts?.method||'GET'} ${path}: HTTP ${r.status}${r.ok?' returned invalid JSON':'. Check container logs'}`);
+  }
+  if(!r.ok)throw Error(typeof d?.detail==='string'?d.detail:`${opts?.method||'GET'} ${path}: HTTP ${r.status}`);
+  return d;
+}
+let running=false, observations=[], token='', requestError='';
 const openSections=new Set();
 function planSteps(steps){return `<ol>${steps.map(step=>`<li>${esc(step.action_id)}${step.writing_instructions?`<p>Writing instructions: ${esc(step.writing_instructions)}</p>`:''}<pre>${esc(JSON.stringify(step.arguments,null,2))}</pre></li>`).join('')}</ol>`}
 function actionPlans(id,s){return Object.entries(s.action_plans||{}).map(([trigger,p])=>{
@@ -41,7 +50,7 @@ function renderObservations(checks){
 $('observation-select').onchange=renderObservation;
 async function refresh(){try{
   const [config,checks]=await Promise.all([api('/api/scenes'),api('/api/checks')]);
-  $('error').textContent=config.config_error||'';
+  $('error').textContent=config.config_error||requestError;
   token=config.token;
   const manual=Object.entries(config.actions||{}).filter(([,a])=>a.manual);
   $('manual-actions').innerHTML=manual.length?'<h2>Actions</h2>'+manual.map(([id,a])=>`<button data-action="${esc(id)}" ${config.active_check?'disabled':''}>${esc(a.name)}</button>`).join(' '):'';
@@ -59,7 +68,7 @@ async function refresh(){try{
   document.querySelectorAll('button[data-scene]').forEach(b=>b.onclick=()=>start(b.dataset.scene));
   renderObservations(checks);
 }catch(e){$('error').textContent=e.message}}
-async function start(id){if(running)return;running=true;try{$('error').textContent='';await api('/api/scenes/'+encodeURIComponent(id)+'/checks',{method:'POST',headers:{'X-Check-Token':token}});$('observation-select').value='latest';await refresh()}catch(e){$('error').textContent=e.message}finally{running=false}}
-async function runAction(id){if(running)return;running=true;try{await api('/api/actions/'+encodeURIComponent(id)+'/runs',{method:'POST',headers:{'X-Check-Token':token}});$('observation-select').value='latest';await refresh()}catch(e){$('error').textContent=e.message}finally{running=false}}
+async function start(id){if(running)return;running=true;try{requestError='';$('error').textContent='';await api('/api/scenes/'+encodeURIComponent(id)+'/checks',{method:'POST',headers:{'X-Check-Token':token}});$('observation-select').value='latest';await refresh()}catch(e){requestError=e.message;$('error').textContent=requestError}finally{running=false}}
+async function runAction(id){if(running)return;running=true;try{requestError='';$('error').textContent='';await api('/api/actions/'+encodeURIComponent(id)+'/runs',{method:'POST',headers:{'X-Check-Token':token}});$('observation-select').value='latest';await refresh()}catch(e){requestError=e.message;$('error').textContent=requestError}finally{running=false}}
 refresh();setInterval(refresh,3000);
 </script></body></html>

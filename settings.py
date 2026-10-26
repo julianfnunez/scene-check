@@ -97,6 +97,7 @@ class ActionInstructions(BaseModel):
 
 class Triggers(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    failure: list[str] = Field(default_factory=list)
     normal: list[str] | ActionInstructions = Field(default_factory=list)
     not_normal: list[str] | ActionInstructions = Field(default_factory=list)
     needs_attention: list[str] | ActionInstructions = Field(default_factory=list)

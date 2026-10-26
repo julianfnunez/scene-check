@@ -516,3 +516,18 @@ failures. These diagnostics exclude URLs, bearer tokens, and notification text.
 After updating the container, run a fresh check and inspect its container logs;
 previous failure records cannot recover details that were not logged. Unconfirmed
 actions are still not automatically retried.
+
+### Check execution failures
+
+Configure `on.failure: [notify_failure]` on a scene to request a manual check if
+execution fails, including before a check can be saved. These actions require
+explicit `arguments` in the sensors YAML; they do not use LLM planning or writing.
+`result.summary` contains a plain-English request to check manually. See the example
+`notify_failure` action. Unknown observations still use `unknown` / `not_normal`.
+
+Failure actions are best effort, run without history writes, and are not retried.
+Scheduled failures attempt one alert per schedule and date, including across
+submission retries and a later execution failure for that occurrence. Each manual
+check is a separate attempt. Deduplication before history can be saved is in memory
+and resets on restart. An unavailable
+notification service or stopped application cannot deliver an alert.

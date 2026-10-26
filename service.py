@@ -17,8 +17,11 @@ class DuplicateScheduledError(RuntimeError):
 
 
 class CheckService:
-    def __init__(self, state, save, runner, records):
+    def __init__(self, state, save, runner, records, on_failure=None):
         self.state, self.save, self.runner = state, save, runner
+        self.on_failure = on_failure
+        self.failure_tasks = set()
+        self.failure_alerts = set()
         self.scheduled_attempts = {(r['schedule_id'], r['scheduled_date']) for r in records
                                    if r.get('source') == 'scheduled'}
 
@@ -40,8 +43,20 @@ class CheckService:
                   'evidence': [], 'trace': [], 'source': 'scheduled' if schedule_id is not None else 'manual'}
         if schedule_id is not None:
             record.update(schedule_id=schedule_id, scheduled_date=scheduled_date, scheduled_for=scheduled_for)
+        if schedule_id is not None and key in self.failure_alerts:
+            record['failure_alerted'] = True
         # The durable check record is also the scheduler's claim. Never replay interrupted work.
-        self.save(record)
+        try:
+            self.save(record)
+        except Exception:
+            # Retry admission, but alert only once for this scheduled occurrence.
+            alert_key = key if schedule_id is not None else record['id']
+            if self.on_failure and alert_key not in self.failure_alerts:
+                self.failure_alerts.add(alert_key)
+                task = asyncio.create_task(self.on_failure(record, scene))
+                self.failure_tasks.add(task)
+                task.add_done_callback(self.failure_tasks.discard)
+            raise
         if schedule_id is not None:
             self.scheduled_attempts.add(key)
         self.state.active = record['id']

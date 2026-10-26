@@ -45,6 +45,8 @@ async def resolve_action_plans(config, api=request, discovery=discover):
     rules, replacements = [], []
     for scene_id, scene in config.scenes.items():
         for trigger in type(scene.on).model_fields:
+            if trigger == 'failure':
+                continue  # Emergency actions use explicit arguments, never model planning.
             rule = getattr(scene.on, trigger)
             ids = rule.actions if isinstance(rule, ActionInstructions) else rule
             has_defaults = any(config.actions[a].default_instructions for a in ids)

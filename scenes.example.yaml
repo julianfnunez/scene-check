@@ -28,6 +28,7 @@ scenes:
   all_coops:
     name: All coops
     on:
+      failure: [notify_failure]
       not_normal:
         instructions: >
           Turn Hue red, then send me a phone notification with the scene result in plain english.
