@@ -43,32 +43,32 @@ async def discover(server):
 
 async def resolve_action_plans(config, api=request, discovery=discover):
     rules, replacements = [], []
-    for scene_id, scene in config.scenes.items():
-        for trigger in type(scene.on).model_fields:
-            if trigger == 'failure':
-                continue  # Emergency actions use explicit arguments, never model planning.
-            rule = getattr(scene.on, trigger)
-            ids = rule.actions if isinstance(rule, ActionInstructions) else rule
-            has_defaults = any(config.actions[a].default_instructions for a in ids)
-            if not isinstance(rule, ActionInstructions):
-                if not has_defaults:
-                    continue
-                ids = list(dict.fromkeys(ids))
-                rule = ActionInstructions(instructions='Run each assigned action once in this exact order: '
-                                          + ', '.join(ids), actions=ids)
-                rule._explicit_order = ids
-                replacements.append((scene, trigger, rule))
-            statuses = ['needs_attention', 'unknown'] if has_defaults and trigger == 'not_normal' else [trigger]
-            rules.extend((scene_id, trigger, rule, status) for status in statuses)
+    run = config.run
+    for trigger in type(run.on).model_fields:
+        if trigger == 'failure':
+            continue  # Emergency actions use explicit arguments, never model planning.
+        rule = getattr(run.on, trigger)
+        ids = rule.actions if isinstance(rule, ActionInstructions) else rule
+        has_defaults = any(config.actions[a].default_instructions for a in ids)
+        if not isinstance(rule, ActionInstructions):
+            if not has_defaults:
+                continue
+            ids = list(dict.fromkeys(ids))
+            rule = ActionInstructions(instructions='Run each assigned action once in this exact order: '
+                                      + ', '.join(ids), actions=ids)
+            rule._explicit_order = ids
+            replacements.append((run, trigger, rule))
+        statuses = ['needs_attention', 'unknown'] if has_defaults and trigger == 'not_normal' else [trigger]
+        rules.extend(('run', trigger, rule, status) for status in statuses)
     # Clear any previous plans before replanning; publish only after all rules validate.
     for _, _, rule, _ in rules:
         rule._steps = None
         rule._steps_by_status.clear()
     catalogs, pending = {}, []
-    sample = context_for({'scene_id': 'example', 'scene_name': 'Example', 'id': 'example',
-                          'created_at': '2026-01-01T00:00:00Z', 'status': 'unknown',
-                          'summary': 'Example result', 'plain_english': 'Example scene report',
-                          'conditions': [], 'children': []})
+    sample = context_for({'scene_id': None, 'scene_name': 'Example run', 'scene_ids': ['example'],
+                          'id': 'example', 'created_at': '2026-01-01T00:00:00Z', 'status': 'unknown',
+                          'summary': 'Example result', 'plain_english': 'Example run report',
+                          'conditions': [], 'scenes': []})
     for scene_id, trigger, rule, plan_status in rules:
         stage = 'discovering assigned tools'
         try:
@@ -97,7 +97,7 @@ async def resolve_action_plans(config, api=request, discovery=discover):
                 'instructions': '''Compile the user's action instructions into an ordered sequence.
 Use only the assigned action IDs and their discovered MCP tool schemas/descriptions.
 Each action's default_instructions supplies reusable behavioral defaults for THAT action.
-Apply them when that action is selected. Explicit scene instructions take precedence over
+Apply them when that action is selected. Explicit run instructions take precedence over
 default_instructions. Neither may change fixed arguments or exceed editable_arguments.
 The supplied status is already known at startup for this plan. Resolve status-dependent
 defaults to concrete arguments for that status; this is supported, not a runtime decision.
@@ -118,10 +118,10 @@ Interpret color and intensity using tool documentation.
 If a notification message is unspecified, retain the configured message, or use
 "{{ result.plain_english }}" if editable.
 Plain-English messages based on future check results ARE supported: use the literal template
-"{{ result.plain_english }}" as the editable message argument. The host writes that text AFTER
-the check from its actual findings, including child scenes, using a separate LLM call.
+"{{ result.plain_english }}" as the editable message argument. The host writes it ONCE per run
+after all selected scenes complete, using a separate LLM call.
 For each step, writing_instructions carries only the requested message style/content guidance
-from scene instructions and action defaults, with scene preferences taking precedence.
+from run instructions and action defaults, with run preferences taking precedence.
 For example, preserve "keep it brief, do not list each coop" for the normal trigger only.
 This is supported runtime writing, not a runtime action decision. Use an empty string when
 no writing preferences are requested or the step does not use result.plain_english.
@@ -130,7 +130,7 @@ into writing_instructions. Example wording is style guidance, never evidence of 
 Requests to explain what passed/failed or provide a human-friendly scene result must use this
 template, never fixed text, invented example results, result.summary, or raw result.details.
 Only these runtime template fields exist: scene.id, scene.name, check.id, check.created_at,
-result.status, result.summary, result.conditions, result.children, result.details, result.plain_english.
+result.status, result.summary, result.conditions, result.scenes, result.details, result.plain_english.
 Use templates for future check values; never fabricate live results. At most 12 steps.
 Execution is sequential and independent: later steps still run after an earlier failure.
 Reject requests whose meaning depends on successful prior actions or tool output.''',
@@ -172,15 +172,15 @@ Reject requests whose meaning depends on successful prior actions or tool output
     for rule, status, steps in pending:
         rule._steps = steps
         rule._steps_by_status[status] = steps
-    for scene, trigger, rule in replacements:
-        setattr(scene.on, trigger, rule)
+    for run, trigger, rule in replacements:
+        setattr(run.on, trigger, rule)
     return config
 
 
-def describe_action_plans(scene):
+def describe_action_plans(run):
     return {trigger: {'instructions': rule.instructions,
                       'steps': [step.model_dump() for step in rule._steps] if rule._steps is not None else None,
                       'steps_by_status': {status: [step.model_dump() for step in steps]
                                           for status, steps in rule._steps_by_status.items()}}
-            for trigger in type(scene.on).model_fields
-            if isinstance(rule := getattr(scene.on, trigger), ActionInstructions)}
+            for trigger in type(run.on).model_fields
+            if isinstance(rule := getattr(run.on, trigger), ActionInstructions)}

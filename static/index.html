@@ -1,74 +1,135 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scene Watch</title><style>
-:root{color-scheme:dark;font:16px system-ui;background:#101820;color:#e9eff3}body{max-width:1000px;margin:auto;padding:32px 20px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:30px;margin-bottom:4px}h2{font-size:21px}small,.muted{color:#a9bac6}article{background:#1b2833;border:1px solid #344653;padding:22px;border-radius:14px;margin:18px 0}button{background:#a7e8cb;color:#10271d;border:0;padding:12px 18px;border-radius:8px;cursor:pointer;font-weight:700}button:disabled{opacity:.45;cursor:wait}.normal,.met{color:#a7e8cb}.needs_attention,.not_met{color:#ffaf92}.unknown{color:#ebd38c}.images{display:flex;gap:12px;flex-wrap:wrap}.images figure{margin:0;max-width:300px}img{width:100%;border-radius:8px}li{margin:10px 0}summary{cursor:pointer}details{margin:16px 0}select{display:block;width:100%;max-width:650px;margin:10px 0 20px;padding:12px;border:1px solid #344653;border-radius:8px;background:#1b2833;color:inherit;font:inherit}label{color:#a9bac6}#error{color:#ffaf92}pre{white-space:pre-wrap;font-size:12px}.badge{text-transform:uppercase;letter-spacing:.07em;font-size:12px;font-weight:700}</style></head><body><header><div><h1>Scene Watch</h1><small>Your scenes. Your definition of normal.</small></div><span class="muted">Sensor pilot</span></header><p id="error" role="alert"></p><div id="scenes"></div><details id="individual-scenes"><summary>Individual scenes</summary><div id="individual-scene-cards"></div></details><div id="manual-actions"></div><h2>Observations</h2><div id="observation-picker" hidden><label for="observation-select">Choose an observation</label><select id="observation-select"></select></div><div id="checks">No observations yet.</div><script>
-const $=id=>document.getElementById(id);const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(path,opts){
-  const r=await fetch(path,opts);
-  const body=await r.text();
-  let d;
-  try{d=JSON.parse(body)}catch{
-    throw Error(`${opts?.method||'GET'} ${path}: HTTP ${r.status}${r.ok?' returned invalid JSON':'. Check container logs'}`);
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scene Watch</title>
+<style>
+:root{color-scheme:dark;font:15px/1.5 system-ui,sans-serif;color:#e5eef4;background:#101a21}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{max-width:1080px;margin:24px auto;padding:0 20px} header{display:flex;justify-content:space-between;align-items:center}
+article,section.panel{border:1px solid #344653;background:#1b2833;border-radius:12px;padding:18px;margin:15px 0}
+h1{margin:0}h2{margin:4px 0 10px;font-size:1.3rem}h3{margin:12px 0 5px;font-size:1.05rem}
+button{background:#288cb3;color:#fff;padding:10px 16px;border:0;border-radius:8px;font:inherit;cursor:pointer;margin:5px 5px 5px 0}
+button:disabled{opacity:.5;cursor:default}.muted,small,label{color:#a9bac6}#error{color:#ffaf92}
+.normal,.met{color:#81e1a1}.unknown,.not_applicable{color:#efc783}.needs_attention,.not_met{color:#ffab9f}
+.badge{text-transform:uppercase;font-size:12px;letter-spacing:.08em;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:14px}
+.grid article{margin:0}details{margin-top:14px}summary{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+.images{display:flex;flex-wrap:wrap;gap:12px}.images figure{width:200px;max-width:100%;margin:0}.images img{width:100%;border-radius:8px}
+select{padding:10px;width:100%;max-width:650px;background:#1b2833;color:inherit;border:1px solid #344653;border-radius:8px}
+li{margin:8px 0}section.scene-result{border-top:1px solid #344653;margin-top:15px;padding-top:8px}
+.tabs{display:flex;gap:6px;margin:24px 0 20px;padding:5px;background:#1b2833;border:1px solid #344653;border-radius:12px;width:fit-content}
+.tabs button{margin:0;min-width:130px;background:transparent;color:#a9bac6}
+.tabs button[aria-selected="true"]{background:#288cb3;color:#fff}
+button,select,summary{min-height:44px}summary{display:list-item;padding:10px 0}
+button:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid #81d3ee;outline-offset:3px}
+article,section,figure,.grid>*{min-width:0}article,section.panel{overflow-wrap:anywhere}
+.tab-intro{margin:0 0 20px}.tab-intro p{margin:4px 0 0}.run-heading{display:flex;gap:16px;justify-content:space-between;align-items:center}
+.run-heading p{margin:4px 0 0}.run-heading button{margin:0;flex-shrink:0}
+.scene-header{display:flex;gap:12px;align-items:baseline;justify-content:space-between}
+.scene-card{display:flex;flex-direction:column}.scene-card>button{align-self:flex-start;margin-top:auto}
+.scene-card>details{margin:0 0 16px}.scene-card>p{margin:6px 0 12px}
+#error:empty{display:none}select{font-size:16px}#picker{margin:12px 0 16px}#picker label{display:block;margin-bottom:6px}
+#manual-actions:empty{display:none}
+@media(max-width:600px){
+  body{margin:16px auto;padding:0 14px;padding-bottom:24px}
+  .tabs{width:100%;margin:20px 0}.tabs button{flex:1;min-width:0}
+  article,section.panel{padding:16px;margin:12px 0}
+  .run-heading{align-items:stretch;flex-direction:column;gap:14px}
+  .run-heading button,.scene-card>button{width:100%;align-self:stretch}
+  .images{gap:10px}.images figure{width:100%}
+  select{max-width:100%}ul,ol{padding-left:22px}
+}
+</style></head>
+<body><header><div><h1>Scene Watch</h1><small>Your scenes. Your definition of normal.</small></div></header>
+<nav class="tabs" role="tablist" aria-label="Dashboard">
+<button id="runs-tab" type="button" role="tab" aria-selected="true" aria-controls="runs-panel" tabindex="0">Runs</button>
+<button id="scenes-tab" type="button" role="tab" aria-selected="false" aria-controls="scenes-panel" tabindex="-1">Scenes</button>
+</nav>
+<p id="error" role="alert"></p>
+<main>
+<section id="runs-panel" role="tabpanel" aria-labelledby="runs-tab" tabindex="0">
+<section class="panel"><div class="run-heading"><div><h2>Run</h2><p id="run-status" class="muted">Check your active scenes together.</p></div><button id="check-all">Check All Active Scenes</button></div><div id="run-info"></div></section>
+<div id="manual-actions"></div>
+<h2>Observations</h2><div id="picker" hidden><label for="observation-select">Select run</label><select id="observation-select"></select></div>
+<div id="checks">No runs yet.</div>
+</section>
+<section id="scenes-panel" role="tabpanel" aria-labelledby="scenes-tab" tabindex="0" hidden>
+<div class="tab-intro"><h2>Scenes</h2><p class="muted">Explore sensors and conditions, or check one scene at a time. Results appear in Runs.</p></div>
+<div class="grid" id="scenes"></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(path,opts){const response=await fetch(path,opts);const text=await response.text();let data;
+try{data=JSON.parse(text)}catch{throw Error(`${opts?.method||'GET'} ${path}: HTTP ${response.status} invalid response`)}
+if(!response.ok)throw Error(typeof data?.detail==='string'?data.detail:`${path}: HTTP ${response.status}`);return data;}
+let token='',requestError='',sending=false,observations=[];
+const expanded=new Set();
+const tabs=['runs','scenes'];
+function selectTab(name,{focus=false,updateHash=true}={}){
+  if(!tabs.includes(name))name='runs';
+  for(const tab of tabs){
+    const selected=tab===name;
+    $(tab+'-tab').setAttribute('aria-selected',String(selected));
+    $(tab+'-tab').tabIndex=selected?0:-1;
+    $(tab+'-panel').hidden=!selected;
   }
-  if(!r.ok)throw Error(typeof d?.detail==='string'?d.detail:`${opts?.method||'GET'} ${path}: HTTP ${r.status}`);
-  return d;
+  if(updateHash&&location.hash!=='#'+name)history.replaceState(null,'','#'+name);
+  if(focus)$(name+'-tab').focus();
 }
-let running=false, observations=[], token='', requestError='';
-const openSections=new Set();
-function planSteps(steps){return `<ol>${steps.map(step=>`<li>${esc(step.action_id)}${step.writing_instructions?`<p>Writing instructions: ${esc(step.writing_instructions)}</p>`:''}<pre>${esc(JSON.stringify(step.arguments,null,2))}</pre></li>`).join('')}</ol>`}
-function actionPlans(id,s){return Object.entries(s.action_plans||{}).map(([trigger,p])=>{
-  const statuses=Object.entries(p.steps_by_status||{});
-  const plan=statuses.length>1?statuses.map(([status,steps])=>`<h3>${esc(status.replaceAll('_',' '))}</h3>${planSteps(steps)}`).join(''):(p.steps?planSteps(p.steps):'<p>Plan unavailable. Checks are blocked until startup planning succeeds.</p>');
-  return `<details data-section="${esc(JSON.stringify([id,trigger]))}"><summary>Action plan · ${esc(trigger.replaceAll('_',' '))}</summary><p>${esc(p.instructions)}</p>${plan}</details>`;
-}).join('')}
-function sceneSchedules(id,config){return Object.entries(config.schedules||{}).filter(([,s])=>s.scene===id).map(([name,s])=>`<p class="muted">${esc(name)} · Daily at ${esc(s.time)} · ${esc(s.timezone)} · ${s.enabled?'enabled':'disabled'} · ${esc(s.catch_up_minutes)} minute catch-up window</p>`).join('')}
-function sceneCard(id,s,config){return `<article><h2>${esc(s.name)}</h2><p class="muted">${s.scenes?.length?'Child scenes: '+s.scenes.map(x=>esc(config.scenes[x].name)).join(' · '):''}${Object.entries(s.sensors).map(([x,p])=>esc(config.sensors[x].name)+' · '+p.evaluations+' independent observation(s), '+p.interval_seconds+'s apart'+(p.instructions?' — '+esc(p.instructions):'')).join(' · ')}</p><ul>${s.conditions.map(c=>`<li>${esc(c)}</li>`).join('')}</ul>${sceneSchedules(id,config)}${actionPlans(id,s)}<button data-scene="${esc(id)}" ${(config.active_check||config.config_error)?'disabled':''}>Check scene</button></article>`}
-function sensorEvaluations(scene){
-  const sensors=(scene.sensors||[]).map(s=>`<h3>${esc(s.name)} · ${esc(s.status)}</h3>${(s.evaluations||[]).map(e=>`<p><strong>Evaluation ${esc(e.evaluation)}: ${esc(e.status)}</strong></p><ul>${e.conditions.map(r=>`<li>${esc(r.condition)} — <strong>${esc(r.status)}</strong><br><small>${esc(r.explanation)}</small></li>`).join('')}</ul>`).join('')}`).join('');
-  const children=(scene.children||[]).map(child=>`<section><h3>${esc(child.name)} · <span class="${esc(child.status)}">${esc(child.status.replaceAll('_',' '))}</span></h3>${sensorEvaluations(child)}</section>`).join('');
-  return sensors+children||'<p class="muted">No sensor evaluations are available for this scene.</p>';
+for(const [index,name] of tabs.entries()){
+  $(name+'-tab').onclick=()=>selectTab(name);
+  $(name+'-tab').onkeydown=event=>{
+    let next;
+    if(event.key==='ArrowRight')next=tabs[(index+1)%tabs.length];
+    if(event.key==='ArrowLeft')next=tabs[(index+tabs.length-1)%tabs.length];
+    if(event.key==='Home')next=tabs[0];
+    if(event.key==='End')next=tabs.at(-1);
+    if(next){event.preventDefault();selectTab(next,{focus:true});}
+  };
 }
-function actionResults(c){return (c.actions||[]).length?`<h3>Actions</h3>${c.plain_english?`<p>${esc(c.plain_english)}</p>`:''}<ul>${c.actions.map(a=>`<li>${esc(a.name||a.action_id)} — <strong>${esc(a.status)}</strong>${a.error?`<br><small>${esc(a.error)}</small>`:''}</li>`).join('')}</ul>${c.action_error?`<p>${esc(c.action_error)}</p>`:''}`:(c.action_error?`<p>${esc(c.action_error)}</p>`:'')}
-function checkCard(c){return `<article><span class="badge ${esc(c.status)}">${esc(c.state==='running'?'checking':c.status.replaceAll('_',' '))}</span><h2>${esc(c.scene_name)}</h2><small>${esc(new Date(c.created_at).toLocaleString())} · ${c.source==='scheduled'?'Scheduled: '+esc(c.schedule_id):'Manual'}</small><p>${esc(c.state==='running'?c.progress||c.summary:c.summary)}</p><ul>${c.conditions.map(x=>`<li><strong class="${esc(x.status)}">${esc(x.status.replaceAll('_',' '))}</strong> — ${esc(x.condition)}<br><small>${esc(x.explanation)}</small></li>`).join('')}</ul><div class="images">${c.evidence.map(e=>`<figure>${(e.images||(e.evidence_id.endsWith('.jpg')?[e.evidence_id]:[])).map(f=>`<a href="/frames/${encodeURIComponent(f)}" target="_blank"><img loading="lazy" src="/frames/${encodeURIComponent(f)}" alt="${esc(e.sensor_id)}"></a>`).join('')}${e.reading!=null?`<pre>${esc(JSON.stringify(e.reading,null,2))}</pre>`:''}<figcaption><small>${esc(e.sensor_id)} · ${esc(new Date(e.observed_at||e.captured_at).toLocaleTimeString())}</small></figcaption></figure>`).join('')}</div>${actionResults(c)}${c.children?.length?`<details data-section="${esc(c.id)}:children"><summary>Child scenes</summary>${c.children.map(child=>`<h3>${esc(child.name)} · <span class="${esc(child.status)}">${esc(child.status.replaceAll('_',' '))}</span></h3><p>${esc(child.summary)}</p><ul>${child.conditions.map(r=>`<li>${esc(r.condition)} — <strong class="${esc(r.status)}">${esc(r.status)}</strong><br><small>${esc(r.explanation)}</small></li>`).join('')}</ul>`).join('')}</details>`:''}<details data-section="${esc(c.id)}:sensors"><summary>Sensor evaluations</summary>${sensorEvaluations(c)}</details><details data-section="${esc(c.id)}:tools"><summary>Tool activity</summary><pre>${esc(JSON.stringify(c.trace,null,2))}</pre></details></article>`}
-function renderObservation(){
-  $('checks').querySelectorAll('details').forEach(d=>{
-    if(d.open)openSections.add(d.dataset.section);else openSections.delete(d.dataset.section);
-  });
-  const selected=$('observation-select').value;
-  const observation=selected==='latest'?observations[0]:observations.find(c=>c.id===selected);
-  $('checks').innerHTML=observation?checkCard(observation):'<p class="muted">Run a scene to see its result and evidence here.</p>';
-  $('checks').querySelectorAll('details').forEach(d=>{d.open=openSections.has(d.dataset.section)});
-}
-function renderObservations(checks){
-  const selected=$('observation-select').value||'latest';
-  observations=checks;
-  $('observation-picker').hidden=!checks.length;
-  $('observation-select').innerHTML=checks.length?
-    `<option value="latest">Latest — ${esc(checks[0].scene_name)} · ${esc(new Date(checks[0].created_at).toLocaleString())}</option>`+
-    checks.slice(1).map(c=>`<option value="${esc(c.id)}">${esc(c.scene_name)} · ${esc(new Date(c.created_at).toLocaleString())} · ${esc(c.state==='running'?'checking':c.status.replaceAll('_',' '))}</option>`).join(''):'';
-  $('observation-select').value=checks.slice(1).some(c=>c.id===selected)?selected:'latest';
-  renderObservation();
-}
+window.addEventListener('hashchange',()=>selectTab(location.hash.slice(1),{updateHash:false}));
+selectTab(location.hash.slice(1),{updateHash:false});
+function rememberDetails(root){root.querySelectorAll('details[data-section]').forEach(d=>{d.open?expanded.add(d.dataset.section):expanded.delete(d.dataset.section)});}
+function restoreDetails(root){root.querySelectorAll('details[data-section]').forEach(d=>d.open=expanded.has(d.dataset.section));}
+function planSteps(steps){return `<ol>${steps.map(s=>`<li>${esc(s.action_id)}${s.writing_instructions?`<p>Writing: ${esc(s.writing_instructions)}</p>`:''}<pre>${esc(JSON.stringify(s.arguments,null,2))}</pre></li>`).join('')}</ol>`;}
+function actionPlans(plans){return Object.entries(plans||{}).map(([trigger,plan])=>`<details data-section="plan:${esc(trigger)}"><summary>Run action plan: ${esc(trigger.replaceAll('_',' '))}</summary><p>${esc(plan.instructions)}</p>${Object.keys(plan.steps_by_status||{}).length>1?Object.entries(plan.steps_by_status).map(([st,steps])=>`<h3>${esc(st)}</h3>${planSteps(steps)}`).join(''):plan.steps?planSteps(plan.steps):'<p>Plan unavailable</p>'}</details>`).join('')}
+function sceneSchedules(id,config){return Object.entries(config.schedules||{}).filter(([,s])=>s.scene===id).map(([name,s])=>`<p class="muted">${esc(name)} · ${esc(s.time)} ${esc(s.timezone)} · ${s.enabled?'enabled':'disabled'}</p>`).join('')}
+function sceneCard(id,s,config){return `<article class="scene-card"><div class="scene-header"><h2>${esc(s.name)}</h2><span class="badge ${s.active?'normal':'muted'}">${s.active?'Active':'Inactive'}</span></div><small>${s.active?'Included in Check All':'Available for individual checks'}</small><p class="muted">${Object.keys(s.sensors).length} sensor(s) · ${s.conditions.length} condition(s)</p><details data-section="scene:${esc(id)}:settings"><summary>Sensors &amp; conditions</summary><h3>Sensors</h3>${Object.entries(s.sensors).map(([sid,p])=>`<p>${esc(config.sensors[sid]?.name||sid)}<br><small>${esc(p.evaluations)} observation(s)${p.evaluations>1?' · '+esc(p.interval_seconds)+'s apart':''}${p.instructions?' · '+esc(p.instructions):''}</small></p>`).join('')}<h3>Conditions</h3><ul>${s.conditions.map(c=>`<li>${esc(c)}</li>`).join('')}</ul>${sceneSchedules(id,config)}</details><button data-scene="${esc(id)}" aria-label="Check ${esc(s.name)}" ${config.active_check||config.config_error?'disabled':''}>Check scene</button></article>`}
+function conditions(items){return `<ul>${(items||[]).map(c=>`<li><span class="${esc(c.status)}">${esc(c.status.replaceAll('_',' '))}</span> — ${esc(c.condition)}<br><small>${esc(c.explanation)}</small></li>`).join('')}</ul>`}
+function sensorDetails(result){return (result.sensors||[]).map(s=>`<h3>${esc(s.name)} · ${esc(s.status)}</h3>${(s.evaluations||[]).map(e=>`<strong>Observation ${esc(e.evaluation)}: ${esc(e.status)}</strong>${conditions(e.conditions)}`).join('')}`).join('')||'<p>No individual sensor evaluations available.</p>'}
+function frames(result){return `<div class="images">${(result.evidence||[]).map(e=>`<figure>${(e.images||(e.evidence_id?.endsWith('.jpg')?[e.evidence_id]:[])).map(f=>`<a href="/frames/${encodeURIComponent(f)}" target="_blank" rel="noopener"><img loading="lazy" src="/frames/${encodeURIComponent(f)}" alt="${esc(e.sensor_id)}"></a>`).join('')}${e.reading!=null?`<pre>${esc(JSON.stringify(e.reading,null,2))}</pre>`:''}<figcaption><small>${esc(e.sensor_id)} · ${esc(e.observed_at||e.captured_at||'')}</small></figcaption></figure>`).join('')}</div>`}
+function actionResults(r){return `<h3>Run actions</h3>${r.plain_english?`<p>${esc(r.plain_english)}</p>`:''}${(r.actions||[]).length?`<ul>${r.actions.map(a=>`<li>${esc(a.name||a.action_id)}: ${esc(a.status)}${a.error?` — <small>${esc(a.error)}</small>`:''}</li>`).join('')}</ul>`:'<p class="muted">No actions executed.</p>'}${r.action_error?`<p>${esc(r.action_error)}</p>`:''}`}
+function checkCard(r){return `<article><span class="badge ${esc(r.status)}">${esc(r.state==='running'?'running':r.status.replaceAll('_',' '))}</span><h2>${esc(r.scene_name)}</h2><small>${esc(new Date(r.created_at).toLocaleString())} · ${esc(r.source==='scheduled'?'Scheduled: '+r.schedule_id:'Manual')} · ${esc((r.scene_ids||[]).length)} scene(s)</small><p>${esc(r.state==='running'?r.progress||r.summary:r.summary)}</p>${(r.scenes||[]).map(s=>`<section class="scene-result"><h3>${esc(s.name)} · <span class="${esc(s.status)}">${esc(s.status.replaceAll('_',' '))}</span></h3><p>${esc(s.summary)}</p>${conditions(s.conditions)}${frames(s)}<details data-section="${esc(r.id)}:${esc(s.scene_id)}:sensors"><summary>Sensor evaluations</summary>${sensorDetails(s)}</details></section>`).join('')}${actionResults(r)}<details data-section="${esc(r.id)}:tools"><summary>Tool activity</summary><pre>${esc(JSON.stringify(r.trace||[],null,2))}</pre></details></article>`}
+function renderObservation(){const old=$('checks');old.querySelectorAll('details[data-section]').forEach(d=>{d.open?expanded.add(d.dataset.section):expanded.delete(d.dataset.section)});
+const chosen=$('observation-select').value;const r=chosen==='latest'?observations[0]:observations.find(r=>r.id===chosen);
+old.innerHTML=r?checkCard(r):'<p class="muted">Run a scene to see results.</p>';old.querySelectorAll('details[data-section]').forEach(d=>d.open=expanded.has(d.dataset.section));}
+function renderObservations(checks){const chosen=$('observation-select').value||'latest';observations=checks;$('picker').hidden=!checks.length;
+$('observation-select').innerHTML=checks.length?`<option value="latest">Latest — ${esc(checks[0].scene_name)}</option>`+checks.slice(1).map(r=>`<option value="${esc(r.id)}">${esc(r.scene_name)} · ${esc(new Date(r.created_at).toLocaleString())}</option>`).join(''):'';
+$('observation-select').value=checks.slice(1).some(r=>r.id===chosen)?chosen:'latest';renderObservation();}
 $('observation-select').onchange=renderObservation;
-async function refresh(){try{
-  const [config,checks]=await Promise.all([api('/api/scenes'),api('/api/checks')]);
-  $('error').textContent=config.config_error||requestError;
-  token=config.token;
-  const manual=Object.entries(config.actions||{}).filter(([,a])=>a.manual);
-  $('manual-actions').innerHTML=manual.length?'<h2>Actions</h2>'+manual.map(([id,a])=>`<button data-action="${esc(id)}" ${config.active_check?'disabled':''}>${esc(a.name)}</button>`).join(' '):'';
-  document.querySelectorAll('button[data-action]').forEach(b=>b.onclick=()=>runAction(b.dataset.action));
-  const planDetails='#scenes details[data-section], #individual-scene-cards details[data-section]';
-  document.querySelectorAll(planDetails).forEach(d=>{
-    if(d.open)openSections.add(d.dataset.section);else openSections.delete(d.dataset.section);
-  });
-  const entries=Object.entries(config.scenes);
-  $('scenes').innerHTML=entries.filter(([,s])=>s.scenes?.length).map(([id,s])=>sceneCard(id,s,config)).join('');
-  const individual=entries.filter(([,s])=>!s.scenes?.length);
-  $('individual-scenes').hidden=!individual.length;
-  $('individual-scene-cards').innerHTML=individual.map(([id,s])=>sceneCard(id,s,config)).join('');
-  document.querySelectorAll(planDetails).forEach(d=>{d.open=openSections.has(d.dataset.section)});
-  document.querySelectorAll('button[data-scene]').forEach(b=>b.onclick=()=>start(b.dataset.scene));
-  renderObservations(checks);
+async function refresh(){try{const [config,checks]=await Promise.all([api('/api/scenes'),api('/api/checks')]);token=config.token;
+const focused=document.activeElement;
+rememberDetails($('run-info'));rememberDetails($('scenes'));
+$('error').textContent=config.config_error||requestError;
+$('check-all').disabled=!!(config.active_check||config.config_error||!Object.values(config.scenes).some(s=>s.active));
+$('run-status').textContent=config.active_check?'A check or action is running.':`${Object.values(config.scenes).filter(s=>s.active).length} active scene(s) · One combined result.`;
+$('run-info').innerHTML=`${Object.entries(config.schedules||{}).filter(([,s])=>s.target==='active_scenes').map(([id,s])=>`<p class="muted">${esc(id)} · Daily ${esc(s.time)} (${esc(s.timezone)}) · ${s.enabled?'enabled':'disabled'}</p>`).join('')}${actionPlans(config.run?.action_plans)}`;
+$('scenes').innerHTML=Object.entries(config.scenes).map(([id,s])=>sceneCard(id,s,config)).join('');
+restoreDetails($('run-info'));restoreDetails($('scenes'));
+$('scenes').querySelectorAll('button[data-scene]').forEach(b=>b.onclick=()=>start('/api/scenes/'+encodeURIComponent(b.dataset.scene)+'/checks'));
+const manual=Object.entries(config.actions||{}).filter(([,a])=>a.manual);
+$('manual-actions').innerHTML=manual.length?'<h2>Manual actions</h2>'+manual.map(([id,a])=>`<button data-action="${esc(id)}" ${config.active_check?'disabled':''}>${esc(a.name)}</button>`).join(''):'';
+$('manual-actions').querySelectorAll('button[data-action]').forEach(b=>b.onclick=()=>start('/api/actions/'+encodeURIComponent(b.dataset.action)+'/runs'));
+renderObservations(checks);
+// Polling replaces cards; keep keyboard focus on the equivalent control.
+if(focused&&!focused.isConnected){
+  const replacement=focused.matches('summary')?[...document.querySelectorAll('details[data-section]')].find(d=>d.dataset.section===focused.parentElement?.dataset.section)?.querySelector('summary'):
+    focused.dataset.scene?[...document.querySelectorAll('button[data-scene]')].find(b=>b.dataset.scene===focused.dataset.scene):
+    focused.dataset.action?[...document.querySelectorAll('button[data-action]')].find(b=>b.dataset.action===focused.dataset.action):null;
+  replacement?.focus({preventScroll:true});
+}
 }catch(e){$('error').textContent=e.message}}
-async function start(id){if(running)return;running=true;try{requestError='';$('error').textContent='';await api('/api/scenes/'+encodeURIComponent(id)+'/checks',{method:'POST',headers:{'X-Check-Token':token}});$('observation-select').value='latest';await refresh()}catch(e){requestError=e.message;$('error').textContent=requestError}finally{running=false}}
-async function runAction(id){if(running)return;running=true;try{requestError='';$('error').textContent='';await api('/api/actions/'+encodeURIComponent(id)+'/runs',{method:'POST',headers:{'X-Check-Token':token}});$('observation-select').value='latest';await refresh()}catch(e){requestError=e.message;$('error').textContent=requestError}finally{running=false}}
-refresh();setInterval(refresh,3000);
+async function start(path){if(sending)return;sending=true;try{requestError='';await api(path,{method:'POST',headers:{'X-Check-Token':token}});$('observation-select').value='latest';if($('runs-panel').hidden)selectTab('runs',{focus:true});await refresh()}catch(e){requestError=e.message;$('error').textContent=requestError}finally{sending=false}}
+$('check-all').onclick=()=>start('/api/checks/active');refresh();setInterval(refresh,3000);
 </script></body></html>

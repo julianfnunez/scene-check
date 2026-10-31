@@ -13,7 +13,7 @@ import yaml
 def config():
     return Configuration.model_validate({
         'servers': {'alerts': {'args': ['-m', 'mcp_servers.alert_server']}},
-        'sensors': {},
+        'sensors': {'cam': {'name': 'Camera', 'server': 'alerts'}},
         'actions': {
             'red': {'name': 'Red', 'server': 'alerts', 'tool': 'set_light', 'arguments': {'on': True}},
             'notify': {'name': 'Notify', 'server': 'alerts', 'tool': 'publish',
@@ -21,21 +21,19 @@ def config():
             'off': {'name': 'Off', 'server': 'alerts', 'tool': 'set_light',
                     'manual': True, 'arguments': {'on': False}},
         },
-        'scenes': {'coop': {'name': 'Coop', 'scenes': ['child'], 'conditions': ['Child passes'],
-                            'on': {'not_normal': ['red', 'notify'], 'unknown': ['notify']}},
-                   'child': {'name': 'Child', 'scenes': ['leaf'], 'conditions': ['Leaf passes']},
-                   'leaf': {'name': 'Leaf', 'sensors': {'cam': {}}, 'conditions': ['Birds visible']}},
-    } | {'sensors': {'cam': {'name': 'Camera', 'server': 'alerts'}}})
+        'scenes': {'coop': {'name': 'Coop', 'sensors': {'cam': {}}, 'conditions': ['Birds visible']}},
+        'run': {'on': {'not_normal': ['red', 'notify'], 'unknown': ['notify']}},
+    })
 
 
 @pytest.mark.parametrize('status,expected', [('normal', []), ('unknown', ['notify', 'red']),
                                             ('needs_attention', ['red', 'notify'])])
 def test_triggers(status, expected):
-    assert selected_actions(config().scenes['coop'], status) == expected
+    assert selected_actions(config().run, status) == expected
 
 
 def test_optional_success_notifications():
-    scene = config().scenes['coop']
+    scene = config().run
     scene.on.normal = ['notify']
     assert selected_actions(scene, 'normal') == ['notify']
 
@@ -51,7 +49,7 @@ def test_status_defaults_and_explicit_override(status, override, expected):
     c.actions['notify'].arguments_by_status = {'normal': {'priority': 3}}
     rule = ActionInstructions(instructions='Notify', actions=['notify'])
     rule._steps = [ActionStep(action_id='notify', arguments=override)]
-    scene = c.scenes['coop']
+    scene = c.run
     scene.on.normal = []
     scene.on.not_normal = []
     scene.on.unknown = []
@@ -85,9 +83,9 @@ def test_bad_references(change):
     if change == 'server':
         raw['actions']['red']['server'] = 'missing'
     elif change == 'action':
-        raw['scenes']['coop']['on']['normal'] = ['missing']
+        raw['run']['on']['normal'] = ['missing']
     else:
-        raw['scenes']['coop']['on']['typo'] = ['red']
+        raw['run']['on']['typo'] = ['red']
     with pytest.raises(ValueError):
         Configuration.model_validate(raw)
 
@@ -95,7 +93,7 @@ def test_bad_references(change):
 def record():
     return {'id': 'a' * 32, 'scene_id': 'coop', 'scene_name': 'Coop', 'created_at': 'now',
             'status': 'needs_attention', 'summary': 'Door open', 'conditions': [],
-            'children': [{'name': 'Girls', 'status': 'unknown', 'conditions': [
+            'scenes': [{'name': 'Girls', 'status': 'unknown', 'conditions': [
                 {'condition': 'Three chickens', 'status': 'unknown', 'explanation': 'Dark'}]}]}
 
 
@@ -107,7 +105,7 @@ def test_independent_actions_and_persisted_intent():
         assert 'Girls' in context['result']['details']
         calls.append(action_id)
         return {'action_id': action_id, 'status': 'failed' if action_id == 'red' else 'succeeded'}
-    asyncio.run(run_actions(rec, config().scenes['coop'], config(),
+    asyncio.run(run_actions(rec, config().run, config(),
                            lambda r: snapshots.append(json.loads(json.dumps(r))), executor))
     assert calls == ['red', 'notify']
     assert [a['status'] for a in rec['actions']] == ['failed', 'succeeded']
@@ -130,7 +128,7 @@ def test_cancel_during_action_preserves_intent_and_releases_busy(monkeypatch):
     web.app.state.config = config()
     web.app.state.active = rec['id']
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(web.run_check(rec, config().scenes['coop']))
+        asyncio.run(web.run_check(rec, ['coop']))
     assert rec['state'] == 'finished'
     assert rec['status'] == 'needs_attention'
     assert rec['actions'][0]['status'] == 'uncertain'

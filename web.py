@@ -89,65 +89,99 @@ def save(record):
         logger.exception('Check storage write failed for %s', record['id'])
         raise
 
-async def notify_check_failure(record, scene):
-    """Failure alerts must work without disk writes or another model request."""
-    if record.get('failure_alerted'):
+async def notify_check_failure(record, scene_ids):
+    """Emergency alert is a single run-level action path, without disk/model dependencies."""
+    if record.get('failure_alerted') or record.get('notification_attempted'):
         return
     record['failure_alerted'] = True
-    if not scene.on.failure:
-        logger.error('Check %s failed; no failure actions configured for scene %s', record['id'], record.get('scene_id', scene.name))
+    actions = app.state.config.run.on.failure
+    if not actions:
+        logger.error('Run %s failed; no run-level failure actions configured', record['id'])
         return
-    message = f"Could not complete the check for {scene.name}. Please check manually."
-    alert = {**record, 'status': 'unknown', 'summary': message, 'conditions': [], 'children': []}
+    labels = ', '.join(app.state.config.scenes[sid].name for sid in scene_ids)
+    message = f"Could not complete the check for {labels}. Please check manually."
+    alert = {**record, 'status': 'unknown', 'summary': message,
+             'conditions': [], 'scenes': [], 'scene_name': labels}
     async def report(_):
         return message
     try:
-        await run_actions(alert, scene, app.state.config, lambda _: None,
-                          writer=report, steps=[ActionStep(action_id=a) for a in scene.on.failure])
+        await run_actions(alert, app.state.config.run, app.state.config, lambda _: None,
+                          writer=report,
+                          steps=[ActionStep(action_id=action_id) for action_id in actions])
     except Exception:
-        logger.exception('Failure notification could not complete for check %s', record['id'])
+        logger.exception('Failure notification could not complete for run %s', record['id'])
 
 
-async def run_check(record, scene):
+def aggregate_run(results):
+    if not results:
+        return 'unknown', 'No scenes were evaluated.'
+    statuses = [result['status'] for result in results]
+    status = ('needs_attention' if 'needs_attention' in statuses else
+              'unknown' if 'unknown' in statuses else 'normal')
+    ok = sum(status == 'normal' for status in statuses)
+    return status, f'{ok}/{len(results)} scenes normal.'
+
+
+async def run_check(record, scene_ids):
     failed = False
     def progress(message, trace, evidence):
         record.update(progress=message, trace=list(trace), evidence=list(evidence))
         save(record)
     try:
-        timeout = check_timeout(scene, app.state.config)
-        async with asyncio.timeout(timeout):
-            result = await evaluate(scene, app.state.config, progress)
-        record.update(result)
+        all_trace, all_evidence = [], []
+        for scene_id in scene_ids:
+            scene = app.state.config.scenes[scene_id]
+            progress(f'Checking {scene.name}', all_trace, all_evidence)
+            def scene_progress(message, trace, evidence):
+                progress(f'{scene.name}: {message}', all_trace + list(trace),
+                         all_evidence + list(evidence))
+            try:
+                async with asyncio.timeout(check_timeout(scene, app.state.config)):
+                    result = await evaluate(scene, app.state.config, scene_progress)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                failed = True
+                logger.exception('Scene %s could not complete in run %s', scene_id, record['id'])
+                result = {'status': 'unknown', 'summary': 'Scene evaluation could not complete',
+                          'conditions': [{'condition': condition, 'status': 'unknown',
+                                          'explanation': 'Evaluation failed; see server logs.',
+                                          'evidence_ids': []} for condition in scene.conditions],
+                          'sensors': [], 'evidence': [], 'trace': [],
+                          'error_type': type(exc).__name__}
+            record['scenes'].append({'scene_id': scene_id, 'name': scene.name, **result})
+            all_trace.extend(result.get('trace', []))
+            all_evidence.extend(result.get('evidence', []))
+            record['trace'], record['evidence'] = all_trace, all_evidence
+            save(record)
+        record['status'], record['summary'] = aggregate_run(record['scenes'])
+        save(record)
     except asyncio.CancelledError:
-        record.update(status='unknown', summary='Check interrupted')
+        record.update(status='unknown', summary='Run interrupted')
         raise
-    except Exception as exc:
+    except Exception:
         failed = True
-        logger.exception('Check %s failed', record['id'])
-        # Never expose vendor responses, camera URLs, or exception groups containing secrets.
-        message = str(exc) if type(exc) is RuntimeError else f'Check could not complete ({type(exc).__name__})'
-        record.update(status='unknown', summary=message)
+        logger.exception('Run %s failed', record['id'])
+        record.update(status='unknown', summary='Run could not complete; check server logs')
     finally:
         try:
             if not asyncio.current_task().cancelling():
                 try:
                     if failed:
-                        await notify_check_failure(record, scene)
+                        await notify_check_failure(record, scene_ids)
                     else:
-                        await run_actions(record, scene, app.state.config, save)
+                        await run_actions(record, app.state.config.run, app.state.config, save)
                 except Exception:
-                    logger.exception('Action processing failed for check %s', record['id'])
-                    if not failed:
-                        failed = True
-                        await notify_check_failure(record, scene)
+                    logger.exception('Action processing failed for run %s', record['id'])
                     record['action_error'] = 'Action processing could not complete; not retried.'
+                    await notify_check_failure(record, scene_ids)
         finally:
             record.update(state='finished', finished_at=datetime.now(timezone.utc).isoformat())
             try:
                 save(record)
             except Exception:
                 if not failed and not asyncio.current_task().cancelling():
-                    await notify_check_failure(record, scene)
+                    await notify_check_failure(record, scene_ids)
                 raise
             finally:
                 app.state.active = None
@@ -158,12 +192,24 @@ def index():
 
 @app.get('/api/scenes')
 def scenes():
-    return {'scenes': {k: {**v.model_dump(), 'action_plans': describe_action_plans(v)} for k, v in app.state.config.scenes.items()},
+    return {'scenes': {k: v.model_dump() for k, v in app.state.config.scenes.items()},
+            'run': {**app.state.config.run.model_dump(), 'action_plans': describe_action_plans(app.state.config.run)},
             'sensors': {k: {'name': v.name} for k, v in app.state.config.sensors.items()},
             'actions': {k: {'name': v.name, 'manual': v.manual} for k, v in app.state.config.actions.items()},
             'schedules': {k: v.model_dump() for k, v in app.state.config.schedules.items()},
             'token': app.state.token,
             'active_check': app.state.active, 'config_error': app.state.config_error}
+
+@app.post('/api/checks/active', status_code=202)
+async def start_active(x_check_token: str | None = Header(default=None)):
+    if app.state.config.actions and x_check_token != app.state.token:
+        raise HTTPException(403, 'Refresh the dashboard and try again')
+    try:
+        return app.state.service.submit()
+    except PlanError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except BusyError as exc:
+        raise HTTPException(409, str(exc)) from None
 
 @app.post('/api/scenes/{scene_id}/checks', status_code=202)
 async def start(scene_id: str, x_check_token: str | None = Header(default=None)):

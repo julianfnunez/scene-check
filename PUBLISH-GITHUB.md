@@ -71,7 +71,7 @@ docker compose -f compose.registry.yaml up -d
 
 Open `http://ZIMA_IP:8081`. The container retains checks and evidence in `./data` and
 mounts the two runtime YAML files read-only. Its enabled schedules can perform checks
-and send alerts after startup; the shipped example schedules `all_coops` at 21:15
+and send alerts after startup; the shipped example schedules all active scenes at 21:15
 America/New_York. Configure its sensors, actions, and schedule before starting it.
 
 To deploy a fixed release or roll back, change the image tag in `compose.registry.yaml`
