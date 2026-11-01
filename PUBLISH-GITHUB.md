@@ -8,12 +8,15 @@ The `.github/workflows/publish.yml` workflow runs on pull requests to `main`, pu
 to `main`, `v*` tags, and manual dispatch. It installs Python 3.12 dependencies from
 `uv.lock`, prepares example configurations, runs pytest, builds an amd64 container,
 and smoke-tests imports and configuration without starting a check or calling vendors.
-Only successful `main` or version-tag runs publish the already-validated image.
-Pull requests and manual runs on other branches build and test without publishing.
+Successful `main`, version-tag, and same-repository pull-request runs publish the
+already-validated image. Fork and Dependabot pull requests, and manual runs on
+other branches, build and test without publishing.
 
 Tags:
 
 - `latest`: successful main-branch builds.
+- `pr-<number>`: successful same-repository pull-request builds, updated on each
+  successful PR run. PR builds never update `latest`.
 - `sha-<commit>`: the build's source commit (short SHA).
 - `1.2.3`: builds triggered by a version tag such as `v1.2.3`.
 
@@ -71,12 +74,23 @@ docker compose -f compose.registry.yaml up -d
 
 Open `http://ZIMA_IP:8081`. The container retains checks and evidence in `./data` and
 mounts the two runtime YAML files read-only. Its enabled schedules can perform checks
-and send alerts after startup; the shipped example schedules `all_coops` at 21:15
+and send alerts after startup; the shipped example schedules all active scenes at 21:15
 America/New_York. Configure its sensors, actions, and schedule before starting it.
 
 To deploy a fixed release or roll back, change the image tag in `compose.registry.yaml`
 from `latest` to a published version or SHA tag, then pull and recreate. Updating the
 image does not overwrite mounted configuration or data. The image targets linux/amd64,
 matching ZimaBoard; additional architectures need a workflow change.
+
+To test an open pull request before merging, push the workflow change to its source
+branch. Once that PR's workflow succeeds, use its PR number in the image tag, for example:
+
+```yaml
+image: ghcr.io/julianfnunez/scene-check:pr-12
+```
+
+Pull and recreate the container as above. Change the tag back to `latest` to return
+to the main-branch image. Re-running an older workflow run uses its original workflow;
+push a new commit to the PR to pick up workflow changes.
 
 For source builds, use `docker compose up --build -d` instead.

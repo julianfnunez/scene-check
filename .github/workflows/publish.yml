@@ -61,6 +61,7 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          flavor: latest=false
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
@@ -85,14 +86,24 @@ jobs:
           docker run --rm "$image_tag" .venv/bin/python -c \
             "import web; from settings import load_config; from mcp_servers import camera_server, yolink_server, alert_server; from zoneinfo import ZoneInfo; config = load_config(); assert config.scenes; ZoneInfo('America/New_York')"
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        if: >-
+          (github.event_name == 'pull_request' &&
+           github.event.pull_request.head.repo.full_name == github.repository &&
+           github.actor != 'dependabot[bot]') ||
+          (github.event_name != 'pull_request' &&
+           (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish the validated image
-        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        if: >-
+          (github.event_name == 'pull_request' &&
+           github.event.pull_request.head.repo.full_name == github.repository &&
+           github.actor != 'dependabot[bot]') ||
+          (github.event_name != 'pull_request' &&
+           (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |

@@ -61,8 +61,6 @@ sensors:
     description: YoLink contact sensor on Chicky's coop entrance; reports open or closed, not animal counts.
     server: yolink
     tool: read_door
-    # Reject cloud reports older than two hours.
-    max_age_seconds: 7200
     arguments:
       device_id: REPLACE_WITH_DEVICE_ID
   girls_door:
@@ -70,7 +68,5 @@ sensors:
     description: YoLink contact sensor on the girls' coop entrance; reports open or closed, not animal counts.
     server: yolink
     tool: read_door
-    # Reject cloud reports older than two hours.
-    max_age_seconds: 7200
     arguments:
       device_id: REPLACE_WITH_DEVICE_ID

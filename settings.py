@@ -30,7 +30,6 @@ class Sensor(BaseModel):
     server: str = 'cameras'
     tool: str = 'capture_camera'
     arguments: dict = Field(default_factory=dict)
-    max_age_seconds: float = Field(default=120, gt=0, le=86400)
     rtsp_env: str | None = None  # Legacy camera adapter configuration only.
 
 class MCPServer(BaseModel):
@@ -72,7 +71,7 @@ class Action(BaseModel):
             if not self.default_instructions.strip():
                 raise ValueError('Default action instructions cannot be blank')
             if self.manual:
-                raise ValueError('Manual actions require explicit arguments; default instructions apply to scene triggers')
+                raise ValueError('Manual actions require explicit arguments; default instructions apply to run triggers')
         return self
 
 class ActionStep(BaseModel):
@@ -106,22 +105,20 @@ class Triggers(BaseModel):
 class Scene(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: str
-    sensors: dict[str, Sampling] = Field(default_factory=dict)
-    scenes: list[str] = Field(default_factory=list)
+    active: bool = True
+    sensors: dict[str, Sampling] = Field(min_length=1)
     conditions: list[str] = Field(min_length=1)
+
+
+class RunSettings(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     on: Triggers = Field(default_factory=Triggers)
 
-    @model_validator(mode='after')
-    def source(self):
-        if bool(self.sensors) == bool(self.scenes):
-            raise ValueError('A scene must define either sensors or child scenes')
-        if len(self.scenes) != len(set(self.scenes)):
-            raise ValueError('Duplicate child scenes')
-        return self
 
 class Schedule(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    scene: str
+    scene: str | None = None
+    target: Literal['active_scenes'] | None = None
     time: str = Field(pattern=r'^(?:[01]\d|2[0-3]):[0-5]\d$')
     timezone: str = 'America/New_York'
     enabled: bool = True
@@ -129,6 +126,8 @@ class Schedule(BaseModel):
 
     @model_validator(mode='after')
     def valid_timezone(self):
+        if (self.scene is None) == (self.target is None):
+            raise ValueError('Schedule must select exactly one scene or active_scenes')
         try:
             ZoneInfo(self.timezone)
         except (ZoneInfoNotFoundError, ValueError):
@@ -141,23 +140,23 @@ class Configuration(BaseModel):
     servers: dict[str, MCPServer] = Field(default_factory=lambda: {'cameras': MCPServer(args=['-m', 'mcp_servers.camera_server'])})
     sensors: dict[str, Sensor]
     scenes: dict[str, Scene]
+    run: RunSettings = Field(default_factory=RunSettings)
     actions: dict[str, Action] = Field(default_factory=dict)
     schedules: dict[str, Schedule] = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def references(self):
         for schedule in self.schedules.values():
-            if schedule.scene not in self.scenes:
+            if schedule.scene is not None and schedule.scene not in self.scenes:
                 raise ValueError('Schedule references an unknown scene')
         for action in self.actions.values():
             if action.server not in self.servers:
                 raise ValueError('Action references an unknown MCP server')
-        for scene in self.scenes.values():
-            for trigger in type(scene.on).model_fields:
-                rule = getattr(scene.on, trigger)
-                ids = rule.actions if isinstance(rule, ActionInstructions) else rule
-                if any(a not in self.actions for a in ids):
-                    raise ValueError('Scene references an unknown action')
+        for trigger in type(self.run.on).model_fields:
+            rule = getattr(self.run.on, trigger)
+            ids = rule.actions if isinstance(rule, ActionInstructions) else rule
+            if any(action_id not in self.actions for action_id in ids):
+                raise ValueError('Run references an unknown action')
         for sensor in self.sensors.values():
             if sensor.server not in self.servers:
                 raise ValueError("Sensor references an unknown MCP server")
@@ -168,21 +167,6 @@ class Configuration(BaseModel):
                 raise ValueError('Scene references an unknown sensor')
             if any(not c.strip() for c in scene.conditions):
                 raise ValueError('Conditions must not be blank')
-        visited, active = set(), set()
-        def visit(scene_id):
-            if scene_id in active:
-                raise ValueError('Circular scene reference: ' + scene_id)
-            if scene_id in visited:
-                return
-            if scene_id not in self.scenes:
-                raise ValueError('Unknown child scene: ' + scene_id)
-            active.add(scene_id)
-            for child in self.scenes[scene_id].scenes:
-                visit(child)
-            active.remove(scene_id)
-            visited.add(scene_id)
-        for scene_id in self.scenes:
-            visit(scene_id)
         return self
 
 def load_config():
@@ -190,8 +174,8 @@ def load_config():
     # Keep standalone combined configurations working (including the demo files).
     if isinstance(scenes, dict) and ('servers' in scenes or 'sensors' in scenes):
         return Configuration.model_validate(scenes)
-    if not isinstance(scenes, dict) or 'scenes' not in scenes or set(scenes) - {'scenes', 'schedules'}:
-        raise ValueError('Scenes file must contain scenes and optionally schedules')
+    if not isinstance(scenes, dict) or 'scenes' not in scenes or set(scenes) - {'scenes', 'schedules', 'run'}:
+        raise ValueError('Scenes file must contain scenes, optionally schedules and run')
     sensors = yaml.load(Path(os.environ.get('SENSORS_FILE', ROOT / 'sensors.yaml')).read_text(), Loader=ConfigLoader)
     if not isinstance(sensors, dict) or set(sensors) - {'servers', 'sensors', 'actions'}:
         raise ValueError('Sensors file may contain only servers, sensors, and actions')

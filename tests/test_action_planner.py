@@ -21,8 +21,8 @@ def config(instructions='Turn Hue dark green then send me a phone notification.'
                       'editable_arguments': ['message']},
             'off': {'name': 'Off', 'server': 'alerts', 'tool': 'set_light', 'arguments': {'on': False}},
         },
-        'scenes': {'coop': {'name': 'Coop', 'sensors': {'cam': {}}, 'conditions': ['Birds visible'],
-                           'on': {'not_normal': {'instructions': instructions, 'actions': ['light', 'phone']}}}},
+        'scenes': {'coop': {'name': 'Coop', 'sensors': {'cam': {}}, 'conditions': ['Birds visible']}},
+        'run': {'on': {'not_normal': {'instructions': instructions, 'actions': ['light', 'phone']}}},
     })
 
 
@@ -62,7 +62,7 @@ def test_compile_order_execute_and_no_planning_side_effects():
     assert requests[0]['store'] is False
     assert requests[0]['text']['format']['strict'] is True
     assert 'PRIVATE_TOPIC' not in requests[0]['input']
-    steps = selected_steps(c.scenes['coop'], 'unknown')
+    steps = selected_steps(c.run, 'unknown')
     assert [s.action_id for s in steps] == ['light', 'phone']
     assert steps[0].arguments == {'hue': 25500, 'brightness': 32}
     calls = []
@@ -71,11 +71,11 @@ def test_compile_order_execute_and_no_planning_side_effects():
         return {'status': 'failed' if action_id == 'light' else 'succeeded'}
     rec = {'id': 'test', 'scene_id': 'coop', 'scene_name': 'Coop', 'created_at': 'now',
            'status': 'unknown', 'summary': 'Dark', 'conditions': []}
-    asyncio.run(run_actions(rec, c.scenes['coop'], c, lambda r: None, executor))
+    asyncio.run(run_actions(rec, c.run, c, lambda r: None, executor))
     assert calls == [('light', {'on': True, 'hue': 25500, 'brightness': 32}),
                      ('phone', {'message': '{{ result.summary }}', 'topic_env': 'PRIVATE_TOPIC'})]
     assert c.actions['light'].arguments == {'on': True}
-    assert describe_action_plans(c.scenes['coop'])['not_normal']['steps'][0]['arguments']['brightness'] == 32
+    assert describe_action_plans(c.run)['not_normal']['steps'][0]['arguments']['brightness'] == 32
 
 
 @pytest.mark.parametrize('steps', [
@@ -93,11 +93,11 @@ def test_compile_order_execute_and_no_planning_side_effects():
 def test_invalid_plan_blocks_without_publishing(steps):
     c = config()
     async def api(payload): return output(steps)
-    with pytest.raises(ValueError, match='coop/on/not_normal'):
+    with pytest.raises(ValueError, match='run/on/not_normal'):
         asyncio.run(resolve_action_plans(c, api, catalog))
-    assert describe_action_plans(c.scenes['coop'])['not_normal']['steps'] is None
+    assert describe_action_plans(c.run)['not_normal']['steps'] is None
     with pytest.raises(ValueError, match='not been resolved'):
-        selected_steps(c.scenes['coop'], 'unknown')
+        selected_steps(c.run, 'unknown')
 
 
 def test_unsupported_and_missing_tool():
@@ -115,20 +115,20 @@ def test_repeated_steps_preserved_and_all_plans_publish_atomically():
         return output([{'action_id': 'light', 'arguments_json': '{"hue":25500}'},
                        {'action_id': 'light', 'arguments_json': '{"hue":0}'}])
     asyncio.run(resolve_action_plans(c, api, catalog))
-    assert len(selected_steps(c.scenes['coop'], 'unknown')) == 2
+    assert len(selected_steps(c.run, 'unknown')) == 2
     from settings import ActionInstructions
-    c.scenes['coop'].on.normal = ActionInstructions(instructions='Notify', actions=['phone'])
+    c.run.on.normal = ActionInstructions(instructions='Notify', actions=['phone'])
     responses = iter([output([{'action_id': 'phone', 'arguments_json': '{}'}]), output(supported=False)])
     async def fail_later(payload): return next(responses)
     with pytest.raises(ValueError):
         asyncio.run(resolve_action_plans(c, fail_later, catalog))
-    assert c.scenes['coop'].on.normal._steps is None
-    assert c.scenes['coop'].on.not_normal._steps is None
+    assert c.run.on.normal._steps is None
+    assert c.run.on.not_normal._steps is None
 
 
 def test_explicit_only_does_not_discover_or_call_model():
     c = config()
-    c.scenes['coop'].on.not_normal = ['light', 'phone']
+    c.run.on.not_normal = ['light', 'phone']
     async def forbidden(*args): pytest.fail('No planning calls needed')
     asyncio.run(resolve_action_plans(c, forbidden, forbidden))
 
@@ -137,8 +137,8 @@ def test_explicit_only_does_not_discover_or_call_model():
 def test_english_defaults_compile_for_each_status_and_scene_override(explicit_override):
     c = config('Send phone notification' + (' at priority 5.' if explicit_override else '.'))
     from settings import ActionInstructions
-    c.scenes['coop'].on.not_normal.actions = ['phone']
-    c.scenes['coop'].on.normal = ActionInstructions(instructions='Send phone notification'
+    c.run.on.not_normal.actions = ['phone']
+    c.run.on.normal = ActionInstructions(instructions='Send phone notification'
         + (' at priority 5.' if explicit_override else '.'), actions=['phone'])
     c.actions['phone'].arguments = {'topic_env': 'PRIVATE_TOPIC'}
     c.actions['phone'].default_instructions = 'Write in plain English. Use priority 3 for normal and 4 for abnormal.'
@@ -153,23 +153,23 @@ def test_english_defaults_compile_for_each_status_and_scene_override(explicit_ov
         data = json.loads(payload['input'])
         calls.append(data['status'])
         assert data['actions']['phone']['default_instructions'].startswith('Write in plain English')
-        assert 'Explicit scene instructions take precedence' in payload['instructions']
+        assert 'Explicit run instructions take precedence' in payload['instructions']
         priority = 5 if 'priority 5' in data['instructions'] else (3 if data['status'] == 'normal' else 4)
         return output([{'action_id': 'phone', 'arguments_json': json.dumps({
             'message': '{{ result.plain_english }}', 'priority': priority})}])
     asyncio.run(resolve_action_plans(c, api, discovery))
     assert calls == ['normal', 'needs_attention', 'unknown']
     for status in calls:
-        step = selected_steps(c.scenes['coop'], status)[0]
+        step = selected_steps(c.run, status)[0]
         assert step.arguments['priority'] == (5 if explicit_override else (3 if status == 'normal' else 4))
-    plans = describe_action_plans(c.scenes['coop'])
+    plans = describe_action_plans(c.run)
     assert set(plans['not_normal']['steps_by_status']) == {'needs_attention', 'unknown'}
     assert c.actions['phone'].arguments == {'topic_env': 'PRIVATE_TOPIC'}
 
 
 def test_action_defaults_also_compile_explicit_lists():
     c = config()
-    c.scenes['coop'].on.not_normal = ['phone']
+    c.run.on.not_normal = ['phone']
     c.actions['phone'].default_instructions = 'Write in plain English.'
     calls = []
     async def api(payload):
@@ -177,7 +177,7 @@ def test_action_defaults_also_compile_explicit_lists():
         return output([{'action_id': 'phone', 'arguments_json': '{"message":"{{ result.plain_english }}"}'}])
     asyncio.run(resolve_action_plans(c, api, catalog))
     assert calls == ['needs_attention', 'unknown']
-    assert selected_steps(c.scenes['coop'], 'unknown')[0].arguments['message'] == '{{ result.plain_english }}'
+    assert selected_steps(c.run, 'unknown')[0].arguments['message'] == '{{ result.plain_english }}'
 
 
 def test_invalid_default_argument_blocks_all_status_plans():
@@ -190,7 +190,7 @@ def test_invalid_default_argument_blocks_all_status_plans():
                       [{'action_id': 'phone', 'arguments_json': '{"topic_env":"UNAUTHORIZED"}'}])
     with pytest.raises(ValueError):
         asyncio.run(resolve_action_plans(c, api, catalog))
-    rule = c.scenes['coop'].on.not_normal
+    rule = c.run.on.not_normal
     assert rule._steps is None
     assert rule._steps_by_status == {}
 
@@ -204,14 +204,14 @@ def test_invalid_default_configuration(defaults, manual):
 
 def test_explicit_lists_keep_order_and_deduplicate_across_triggers():
     c = config()
-    c.scenes['coop'].on.unknown = ['phone']
-    c.scenes['coop'].on.not_normal = ['phone', 'light']
+    c.run.on.unknown = ['phone']
+    c.run.on.not_normal = ['phone', 'light']
     c.actions['phone'].default_instructions = 'Write in plain English'
     async def api(payload):
         data = json.loads(payload['input'])
         return output([{'action_id': aid, 'arguments_json': '{}'} for aid in data['actions']])
     asyncio.run(resolve_action_plans(c, api, catalog))
-    assert [s.action_id for s in selected_steps(c.scenes['coop'], 'unknown')] == ['phone', 'light']
+    assert [s.action_id for s in selected_steps(c.run, 'unknown')] == ['phone', 'light']
 
 
 def test_real_tool_discovery_is_read_only():
@@ -235,7 +235,7 @@ def test_startup_plan_and_error_visible(tmp_path, monkeypatch, invalid):
     monkeypatch.setattr(web, 'resolve_action_plans', actions)
     with TestClient(web.app) as client:
         data = client.get('/api/scenes').json()
-        plans = data['scenes']['coop']['action_plans']
+        plans = data['run']['action_plans']
         if invalid:
             assert data['config_error']
             assert plans['not_normal']['steps'] is None

@@ -68,7 +68,7 @@ def test_final_save_failure_always_releases_busy_guard(monkeypatch, kind):
     web.app.state.config = config()
     web.app.state.active = 'running'
     record = {'id': 'running', 'state': 'running'}
-    task = (web.run_check(record, config().scenes['coop']) if kind == 'scene'
+    task = (web.run_check(record, ['coop']) if kind == 'scene'
             else web.run_manual(record, 'off'))
     with pytest.raises(OSError): asyncio.run(task)
     assert web.app.state.active is None

@@ -72,6 +72,7 @@ async def execute(action_id, config, context):
     outcome = {'action_id': action_id, 'name': action.name,
                'started_at': datetime.now(timezone.utc).isoformat(), 'status': 'running'}
     stage = 'argument templates'
+    logger.info('Action started action=%s server=%s tool=%s', action_id, action.server, action.tool)
     try:
         arguments = render(action.arguments, context)
         stage = 'MCP server startup'
@@ -97,6 +98,7 @@ async def execute(action_id, config, context):
                         raise RuntimeError('Action tool reported failure')
                     stage = 'MCP session cleanup'
         outcome['status'] = 'succeeded'
+        logger.info('Action succeeded action=%s server=%s tool=%s', action_id, action.server, action.tool)
     except asyncio.CancelledError:
         outcome.update(status='uncertain', error='Interrupted; action may have executed. Not retried.')
         raise
@@ -112,16 +114,23 @@ async def execute(action_id, config, context):
 
 
 def context_for(record):
-    def summary(result):
+    """Expose run-level results to action templates (legacy scene alias remains)."""
+    lines = []
+    for scene in record.get('scenes', []):
+        lines.append(f"{scene['name']}: {scene['status']}")
+        lines.extend(f"  {c['condition']}: {c['status']} — {c.get('explanation', '')}"
+                     for c in scene.get('conditions', []))
+    if not lines:
         lines = [f"{c['condition']}: {c['status']} — {c.get('explanation', '')}"
-                 for c in result.get('conditions', [])]
-        for child in result.get('children', []):
-            lines.append(f"{child['name']}: {child['status']}\n{summary(child)}")
-        return '\n'.join(lines)
-    return {'scene': {'id': record['scene_id'], 'name': record['scene_name']},
-            'result': {**{k: record.get(k) for k in ('status', 'summary', 'conditions', 'children')},
-                       'details': summary(record), 'plain_english': record.get('plain_english', '')},
-            'check': {'id': record['id'], 'created_at': record['created_at']}}
+                 for c in record.get('conditions', [])]
+    return {
+        'scene': {'id': record.get('scene_id') or 'active_scenes', 'name': record['scene_name']},
+        'run': {'id': record['id'], 'name': record['scene_name'],
+                'scene_ids': record.get('scene_ids', []), 'status': record['status']},
+        'result': {**{k: record.get(k) for k in ('status', 'summary', 'conditions', 'scenes')},
+                   'details': '\n'.join(lines), 'plain_english': record.get('plain_english', '')},
+        'check': {'id': record['id'], 'created_at': record['created_at']},
+    }
 
 
 def needs_report(value):
@@ -136,34 +145,44 @@ def action_arguments(action, status, overrides):
     return {**action.arguments, **action.arguments_by_status.get(status, {}), **overrides}
 
 
-async def run_actions(record, scene, config, save, executor=execute, writer=write_report, *, steps=None):
+async def run_actions(record, run, config, save, executor=execute, writer=write_report, *, steps=None):
+    """Execute run-level actions; one generated report and at most one publish per run."""
+    selected = selected_steps(run, record['status']) if steps is None else steps
+    publishers = [step for step in selected if config.actions[step.action_id].tool == 'publish']
+    if len(publishers) > 1:
+        raise ValueError('A run may contain at most one publish notification action')
     record['actions'] = []
-    reports = {}
-    for step in (selected_steps(scene, record['status']) if steps is None else steps):
+    # Synthesize the entire run once, before its actions, even if several use its report.
+    report_steps = [step for step in selected if needs_report(
+        action_arguments(config.actions[step.action_id], record['status'], step.arguments))]
+    if report_steps:
+        style = next((step.writing_instructions for step in report_steps if step.writing_instructions), '')
+        record['progress'] = 'Writing plain-English run notification'
+        save(record)
+        try:
+            record['plain_english'] = await writer({**record, 'writing_instructions': style})
+            record['report_source'] = 'model'
+        except Exception:
+            logger.exception('Notification synthesis failed for run %s; using fallback', record['id'])
+            record['plain_english'] = fallback_report(record)
+            record['report_source'] = 'fallback'
+        save(record)
+    for step in selected:
         action_id = step.action_id
         action = config.actions[action_id]
         effective = config.model_copy(update={'actions': {**config.actions, action_id:
             action.model_copy(update={'arguments': action_arguments(action, record['status'], step.arguments)})}})
-        uses_report = needs_report(effective.actions[action_id].arguments)
-        if uses_report:
-            style = step.writing_instructions
-            if style not in reports:
-                record['progress'] = 'Writing plain-English scene report'
-                save(record)
-                try:
-                    message = await writer({**record, 'writing_instructions': style})
-                    reports[style] = (message, 'model')
-                except Exception:
-                    reports[style] = (fallback_report(record), 'fallback')
-            record['plain_english'], record['report_source'] = reports[style]
-            save(record)
-        # Persist intent before invoking an external side effect.
-        pending = {'action_id': action_id, 'name': config.actions[action_id].name,
+        pending = {'action_id': action_id, 'name': action.name,
                    'status': 'uncertain', 'error': 'Execution interrupted or unconfirmed; not retried.'}
         record['actions'].append(pending)
         save(record)
+        # Mark only after saving intent succeeds: a storage failure before this
+        # point must still allow an emergency notification. Once invocation starts,
+        # even a lost response can mean delivery, so never send a second push.
+        if action.tool == 'publish':
+            record['notification_attempted'] = True
         outcome = await executor(action_id, effective, context_for(record))
-        if uses_report:
+        if needs_report(effective.actions[action_id].arguments):
             outcome.update(report=record['plain_english'], report_source=record['report_source'],
                            writing_instructions=step.writing_instructions)
         pending.clear()
