@@ -30,7 +30,6 @@ class Sensor(BaseModel):
     server: str = 'cameras'
     tool: str = 'capture_camera'
     arguments: dict = Field(default_factory=dict)
-    max_age_seconds: float = Field(default=120, gt=0, le=86400)
     rtsp_env: str | None = None  # Legacy camera adapter configuration only.
 
 class MCPServer(BaseModel):

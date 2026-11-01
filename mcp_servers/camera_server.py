@@ -7,6 +7,10 @@ from pathlib import Path
 from uuid import uuid4
 from mcp.server.fastmcp import FastMCP, Image
 from settings import load_config, data_dir
+from logging_setup import configure_logging
+
+if __name__ == '__main__':
+    configure_logging()
 
 mcp = FastMCP('Scene Watch cameras')
 

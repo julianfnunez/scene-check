@@ -206,7 +206,8 @@ async def evaluate(scene, config, progress, api=request, evaluator=None, sleep=a
     for sensor_id, sampling in scene.sensors.items():
         single = scene.model_copy(update={"sensors": {sensor_id: sampling}})
         evaluations = []
-        observations = await collect_series(sensor_id, sampling, config, progress, trace, evidence) if use_scheduled_captures else None
+        observations = await collect_series(sensor_id, sampling, config, progress, trace, evidence,
+                                            scene_name=scene.name) if use_scheduled_captures else None
         for index in range(sampling.evaluations):
             if index and not use_scheduled_captures:
                 progress(f'Waiting {sampling.interval_seconds:g}s before next {sensor_id} evaluation', trace, evidence)
@@ -223,9 +224,15 @@ async def evaluate(scene, config, progress, api=request, evaluator=None, sleep=a
                 else:
                     result = await evaluator(single, config, report, api=api)
             except Exception as exc:
-                logger.exception('Evaluation failed for sensor %s, observation %s', sensor_id, index + 1)
-                reason = ('Capture failed; check sensor connectivity and observation timestamp.'
-                          if observations is not None and observations[index] is None else
+                capture_failed = observations is not None and observations[index] is None
+                if not capture_failed:
+                    logger.error('Evaluation failed scene=%s sensor=%s observation=%s stage=assessment reason=%s',
+                                 scene.name, sensor_id, index + 1, type(exc).__name__)
+                failure = next((t for t in reversed(trace) if t.get('sensor_id') == sensor_id
+                                and t.get('status') == 'failed'
+                                and t.get('evaluation', index + 1) == index + 1), {})
+                reason = ('Observation unavailable: ' + failure.get('error', 'check sensor logs for details')
+                          if capture_failed else
                           'Assessment validation failed after retry; see server logs.' if isinstance(exc, ValueError) else
                           'Evaluator request failed; check server logs for the API or connection error.')
                 result = {'status': 'unknown', 'summary': 'Evaluation could not complete',
@@ -241,6 +248,8 @@ async def evaluate(scene, config, progress, api=request, evaluator=None, sleep=a
         conditions = aggregate_conditions(scene.conditions, evaluations)
         sensors.append({'sensor_id': sensor_id, 'name': config.sensors[sensor_id].name,
                         'status': state(conditions), 'conditions': conditions, 'evaluations': evaluations})
+        logger.info('Sensor evaluated scene=%s sensor=%s status=%s observations=%s',
+                    scene.name, sensor_id, state(conditions), len(evaluations))
     # Across sensors, a definite pass resolves uncertainty; any definite failure wins.
     final = []
     for index, condition in enumerate(scene.conditions):

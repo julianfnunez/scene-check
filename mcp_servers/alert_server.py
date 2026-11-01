@@ -9,6 +9,10 @@ from typing import Annotated, Literal
 from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 from .notifications import hue_set_state
+from logging_setup import configure_logging
+
+if __name__ == '__main__':
+    configure_logging()
 
 mcp = FastMCP('Scene Watch alerts')
 logger = logging.getLogger(__name__)

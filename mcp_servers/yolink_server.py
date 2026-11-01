@@ -1,6 +1,7 @@
 """Read-only YoLink cloud MCP adapter. Credentials never enter observations."""
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -9,9 +10,18 @@ from datetime import datetime, timezone
 import httpx
 from mcp.server.fastmcp import FastMCP
 from settings import load_config
+from logging_setup import configure_logging
+
+if __name__ == '__main__':
+    configure_logging()
 
 mcp = FastMCP('YoLink doors')
+logger = logging.getLogger(__name__)
 BASE = 'https://api.yosmart.com/open/yolink'
+
+
+class YoLinkError(ValueError):
+    """Adapter-generated messages containing no device IDs or credentials."""
 
 
 class YoLinkClient:
@@ -19,21 +29,25 @@ class YoLinkClient:
         self.client = client
         self.access_token = None
         self.expires_at = 0
+        self.stage = 'configuration'
 
     async def authenticate(self):
+        self.stage = 'authentication'
         uaid = os.environ.get('YOLINK_UAID')
         secret = os.environ.get('YOLINK_SECRET_KEY')
         if not uaid or not secret:
-            raise ValueError('Set YOLINK_UAID and YOLINK_SECRET_KEY')
+            raise YoLinkError('Set YOLINK_UAID and YOLINK_SECRET_KEY')
         response = await self.client.post(BASE + '/token', data={
             'grant_type': 'client_credentials', 'client_id': uaid, 'client_secret': secret})
         if response.status_code != 200:
-            raise ValueError('YoLink authentication failed')
+            raise YoLinkError(f'YoLink authentication failed (HTTP {response.status_code})')
         data = response.json()
+        if not isinstance(data, dict):
+            raise YoLinkError('Invalid YoLink authentication response')
         token = data.get('access_token')
         lifetime = float(data.get('expires_in', 0))
         if not isinstance(token, str) or not token or lifetime <= 0:
-            raise ValueError('Invalid YoLink authentication response')
+            raise YoLinkError('Invalid YoLink authentication response')
         self.access_token = token
         self.expires_at = time.monotonic() + max(0, lifetime - 30)
 
@@ -41,6 +55,7 @@ class YoLinkClient:
         for attempt in range(2):
             if not self.access_token or time.monotonic() >= self.expires_at:
                 await self.authenticate()
+            self.stage = method
             response = await self.client.post(BASE + '/v2/api',
                 headers={'Authorization': 'Bearer ' + self.access_token},
                 json={'method': method, 'time': int(time.time() * 1000), **arguments})
@@ -48,39 +63,49 @@ class YoLinkClient:
                 self.access_token = None
                 continue
             if response.status_code != 200:
-                raise ValueError('YoLink API request failed')
+                raise YoLinkError(f'YoLink API request failed (HTTP {response.status_code})')
             result = response.json()
-            if result.get('code') != '000000' or not isinstance(result.get('data'), dict):
-                raise ValueError('YoLink API rejected the request or returned invalid data')
+            if not isinstance(result, dict):
+                raise YoLinkError('Invalid YoLink API response')
+            code = result.get('code')
+            if code != '000000':
+                safe_code = code if isinstance(code, str) and code.isascii() and code.isdigit() and len(code) <= 12 else 'invalid'
+                raise YoLinkError(f'YoLink API rejected the request (code={safe_code})')
+            if not isinstance(result.get('data'), dict):
+                raise YoLinkError('Invalid YoLink API data')
             return result['data']
 
     async def devices(self):
         devices = (await self.call('Home.getDeviceList')).get('devices')
         if not isinstance(devices, list):
-            raise ValueError('Invalid YoLink device list')
+            raise YoLinkError('Invalid YoLink device list')
         return devices
 
     async def read(self, sensor_id, device_id):
-        device = next((d for d in await self.devices()
+        devices = await self.devices()
+        self.stage = 'device selection'
+        device = next((d for d in devices
                        if d.get('deviceId') == device_id and d.get('type') == 'DoorSensor'), None)
         if not device or not isinstance(device.get('token'), str) or not device['token']:
-            raise ValueError('Configured YoLink door sensor was not found')
+            raise YoLinkError('Configured YoLink door sensor was not found')
         data = await self.call('DoorSensor.getState', targetDevice=device_id, token=device['token'])
+        self.stage = 'door state validation'
         if data.get('deviceId') != device_id or data.get('online') is not True:
-            raise ValueError('YoLink door sensor is offline or returned a different device')
+            raise YoLinkError('YoLink door sensor is offline or returned a different device')
         state = data.get('state')
         if not isinstance(state, dict) or state.get('state') not in ('open', 'closed'):
-            raise ValueError('YoLink door sensor returned an invalid state')
+            raise YoLinkError('YoLink door sensor returned an invalid state')
         # reportAt is the observation time; stateChangedAt can legitimately be days old.
         stamp = data.get('reportAt')
+        self.stage = 'report timestamp validation'
         if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
             observed = datetime.fromtimestamp(stamp / 1000, timezone.utc)
         elif isinstance(stamp, str):
             observed = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
         else:
-            raise ValueError('YoLink door reading has no report timestamp')
+            raise YoLinkError('YoLink door reading has no report timestamp')
         if observed.tzinfo is None:
-            raise ValueError('YoLink report timestamp needs a timezone')
+            raise YoLinkError('YoLink report timestamp needs a timezone')
         reading = {'state': state['state'], 'online': True}
         for key in ('battery', 'stateChangedAt'):
             if key in state:
@@ -97,12 +122,20 @@ async def read_door(sensor_id: str, device_id: str) -> str:
         raise ValueError('Sensor is not assigned to this scene')
     if config.sensors[sensor_id].arguments.get('device_id') != device_id:
         raise ValueError('Device does not match the configured sensor')
+    api = None
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            return json.dumps(await YoLinkClient(client).read(sensor_id, device_id))
-    except (httpx.HTTPError, ValueError, TypeError, KeyError):
+            api = YoLinkClient(client)
+            return json.dumps(await api.read(sensor_id, device_id))
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, OverflowError) as exc:
+        reason = (str(exc) if isinstance(exc, YoLinkError) else
+                  'YoLink cloud request timed out' if isinstance(exc, httpx.TimeoutException) else
+                  'YoLink cloud connection failed' if isinstance(exc, httpx.HTTPError) else
+                  'Invalid YoLink response or report timestamp')
+        logger.error('YoLink read failed sensor=%s stage=%s reason=%s',
+                     sensor_id, api.stage if api else 'client initialization', reason)
         # Do not expose cloud response bodies, URLs, or credentials through MCP errors.
-        raise ValueError('YoLink reading unavailable; check credentials, device, connectivity and report timestamp') from None
+        raise ValueError('YoLink reading unavailable; see adapter logs for details') from None
 
 
 async def list_devices():

@@ -72,6 +72,7 @@ async def execute(action_id, config, context):
     outcome = {'action_id': action_id, 'name': action.name,
                'started_at': datetime.now(timezone.utc).isoformat(), 'status': 'running'}
     stage = 'argument templates'
+    logger.info('Action started action=%s server=%s tool=%s', action_id, action.server, action.tool)
     try:
         arguments = render(action.arguments, context)
         stage = 'MCP server startup'
@@ -97,6 +98,7 @@ async def execute(action_id, config, context):
                         raise RuntimeError('Action tool reported failure')
                     stage = 'MCP session cleanup'
         outcome['status'] = 'succeeded'
+        logger.info('Action succeeded action=%s server=%s tool=%s', action_id, action.server, action.tool)
     except asyncio.CancelledError:
         outcome.update(status='uncertain', error='Interrupted; action may have executed. Not retried.')
         raise

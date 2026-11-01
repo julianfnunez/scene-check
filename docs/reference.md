@@ -89,8 +89,16 @@ The host captures observations from stdio MCP tools first. Each tool receives it
 configured arguments plus `sensor_id`. An observation must have the matching sensor
 ID, an offset-aware timestamp `observed_at`, and either a `reading` or image. Camera
 MCP tools return supported JPEG, PNG or WebP images alongside a structured metadata
-envelope. Set `max_age_seconds` for freshness checks; missing, stale or malformed
-measurements are not guessed. An observation failing to collect yields unknown.
+envelope. Observation age does not invalidate a reading. Missing or malformed
+observations and timestamps more than five seconds in the future yield unknown.
+
+YoLink doors use the cloud-reported state when the response identifies the
+assigned device as online. A door remaining
+closed for hours does not require its state to change. `stateChangedAt` records
+the last transition; `reportAt` records the last report and remains the observation
+timestamp. Neither is replaced with the current time. This policy trusts YoLink's
+cached state and online flag; querying the cloud does not establish a fresh
+physical measurement.
 
 The LLM evaluates each observation separately against the scene conditions and sensor
 description. `not_applicable` means the sensor cannot assess that *type* of condition;
@@ -99,6 +107,24 @@ and evidence IDs. Invalid assessments get one validation retry. Multiple reading
 one condition are aggregated: definite `not_met` wins, then `unknown`, then `met`.
 Across different sensors a definite `not_met` wins, otherwise `met`, otherwise unknown.
 The current evaluator does not support a separate joint-sensor interpretation stage.
+
+## Logs and sensor diagnostics
+
+The console logs run and scene starts/results, sensor collection and evaluation,
+and action delivery outcomes. Successful dashboard polling requests and routine
+MCP request messages are suppressed; HTTP errors and check submissions remain visible.
+
+Collection failures include the scene, sensor ID, MCP server/tool, observation
+number and failing stage (startup, discovery, invocation, or validation/storage).
+Safe failure details are also retained in the run's tool activity. Invalid
+timestamps, missing tools, timeouts and storage failures have distinct diagnostics. Failed captures
+remain unknown and are never sent to the model as evidence.
+
+The YoLink adapter logs authentication HTTP failures, API rejection codes,
+missing/offline devices, and invalid reports at the stage where they occur.
+Credentials, device IDs, tool arguments, vendor response bodies and raw connection
+exception text are omitted. External MCP adapters should provide equivalent safe
+diagnostics on stderr; their raw tool error bodies are not copied into host logs.
 
 ## Run actions and notifications
 

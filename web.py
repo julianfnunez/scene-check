@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -16,16 +17,21 @@ from actions import run_actions, execute
 from action_planner import resolve_action_plans, describe_action_plans
 from service import CheckService, BusyError, PlanError
 from scheduler import run_scheduler
+from logging_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app):
+    configure_logging()
+    logger.info('Preparing sensor and action plans')
     app.state.config = load_config()
     app.state.config_error = None
     try:
         await resolve_plans(app.state.config)
         await resolve_action_plans(app.state.config)
+        logger.info('Startup plans ready scenes=%s sensors=%s',
+                    len(app.state.config.scenes), len(app.state.config.sensors))
     except Exception as exc:
         logger.exception('Startup instruction planning failed')
         app.state.config_error = str(exc) if type(exc) in (ValueError, RuntimeError) else "Could not interpret startup instructions"
@@ -123,6 +129,9 @@ def aggregate_run(results):
 
 
 async def run_check(record, scene_ids):
+    started = time.monotonic()
+    logger.info('Run started run=%s source=%s scenes=%s',
+                record['id'], record.get('source', 'manual'), ','.join(scene_ids))
     failed = False
     def progress(message, trace, evidence):
         record.update(progress=message, trace=list(trace), evidence=list(evidence))
@@ -131,6 +140,7 @@ async def run_check(record, scene_ids):
         all_trace, all_evidence = [], []
         for scene_id in scene_ids:
             scene = app.state.config.scenes[scene_id]
+            logger.info('Scene started run=%s scene=%s name=%s', record['id'], scene_id, scene.name)
             progress(f'Checking {scene.name}', all_trace, all_evidence)
             def scene_progress(message, trace, evidence):
                 progress(f'{scene.name}: {message}', all_trace + list(trace),
@@ -150,6 +160,7 @@ async def run_check(record, scene_ids):
                           'sensors': [], 'evidence': [], 'trace': [],
                           'error_type': type(exc).__name__}
             record['scenes'].append({'scene_id': scene_id, 'name': scene.name, **result})
+            logger.info('Scene finished run=%s scene=%s status=%s', record['id'], scene_id, result['status'])
             all_trace.extend(result.get('trace', []))
             all_evidence.extend(result.get('evidence', []))
             record['trace'], record['evidence'] = all_trace, all_evidence
@@ -184,6 +195,10 @@ async def run_check(record, scene_ids):
                     await notify_check_failure(record, scene_ids)
                 raise
             finally:
+                logger.info('Run finished run=%s status=%s actions=%s elapsed=%.1fs',
+                            record['id'], record.get('status', 'unknown'),
+                            ','.join(a.get('status', 'unknown') for a in record.get('actions', [])) or 'none',
+                            time.monotonic() - started)
                 app.state.active = None
 
 @app.get('/')
