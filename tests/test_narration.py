@@ -40,8 +40,8 @@ def test_writer_uses_actual_child_findings_and_preserves_uncertainty_in_prompt()
     assert payload['store'] is False and 'tools' not in payload
     assert 'SECRET' not in payload['input']
     assert 'image is too dark' in payload['input']
-    assert 'does NOT mean zero' in payload['instructions']
-    assert 'couldn\'t confirm' in payload['instructions']
+    assert 'infer opposite conditions from failed checks' in payload['instructions']
+    assert 'unresolved uncertainty' in payload['instructions']
 
 
 @pytest.mark.parametrize('message', ['', '  ', 'x' * 1501])

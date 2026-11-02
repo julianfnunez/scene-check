@@ -160,7 +160,10 @@ message: '{{ result.plain_english }}'
 The runtime forwards only the projected scene findings, conditions and summarized
 sensor evaluations to the writer, not images, raw traces or secrets. The writer
 cannot access tools. It must preserve uncertainties instead of inventing failed
-counts or opposite conditions. The resulting message is cached for the run and
+counts or opposite conditions. Successful runs default to a few words of reassurance,
+without listing checks or observations whose uncertainty was resolved by other evidence.
+Explicit writing preferences can request more detail. Problems and unresolved uncertainty
+still identify the affected scenes and findings. The resulting message is cached for the run and
 reused by any action that needs it; on writing failure, a deterministic factual
 fallback is used. Generated text and its source are saved in the run history.
 
